@@ -423,11 +423,21 @@ async def classify_batch(
 
     simple_count = sum(1 for r in results if r["tier"] == "simple")
     complex_count = sum(1 for r in results if r["tier"] == "complex")
+    mid_count = sum(1 for r in results if r["tier"] == "mid")
+    coding_count = sum(1 for r in results if r["tier"] == "coding")
+    math_count = sum(1 for r in results if r["tier"] == "math")
+    planning_count = sum(1 for r in results if r["tier"] == "planning")
+    abliterated_count = sum(1 for r in results if r["tier"] == "abliterated")
 
     return {
         "total": len(results),
         "simple": simple_count,
         "complex": complex_count,
+        "mid": mid_count,
+        "coding": coding_count,
+        "math": math_count,
+        "planning": planning_count,
+        "abliterated": abliterated_count,
         "results": results,
     }
 
@@ -1143,6 +1153,42 @@ async def chat_completions(
                 "strategy": "profile:reasoning",
                 "selected_model": selected_model,
                 "tier": "reasoning",
+                "confidence": 1.0,
+                "complexity_score": 0,
+            }
+        elif profile == "coding":
+            selected_model = settings.CODING_MODEL
+            analysis_info = {
+                "strategy": "profile:coding",
+                "selected_model": selected_model,
+                "tier": "coding",
+                "confidence": 1.0,
+                "complexity_score": 0,
+            }
+        elif profile == "math":
+            selected_model = settings.MATH_MODEL
+            analysis_info = {
+                "strategy": "profile:math",
+                "selected_model": selected_model,
+                "tier": "math",
+                "confidence": 1.0,
+                "complexity_score": 0,
+            }
+        elif profile == "planning":
+            selected_model = settings.PLANNING_MODEL
+            analysis_info = {
+                "strategy": "profile:planning",
+                "selected_model": selected_model,
+                "tier": "planning",
+                "confidence": 1.0,
+                "complexity_score": 0,
+            }
+        elif profile == "abliterated":
+            selected_model = settings.ABLITERATED_MODEL
+            analysis_info = {
+                "strategy": "profile:abliterated",
+                "selected_model": selected_model,
+                "tier": "abliterated",
                 "confidence": 1.0,
                 "complexity_score": 0,
             }

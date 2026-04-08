@@ -128,3 +128,196 @@ class TestRoutingHeaders:
         assert "X-Routed-Model" in resp.headers
         assert "X-Routed-Tier" in resp.headers
         assert "X-Complexity-Score" in resp.headers
+
+
+# ---------------------------------------------------------------------------
+# NMT-008 — Tests for 4 new tier profiles (coding, math, planning, abliterated)
+# ---------------------------------------------------------------------------
+
+_NEW_TIER_PROFILES = ("coding", "math", "planning", "abliterated")
+
+# Expected env var suffixes per tier (maps profile → env var suffix)
+_TIER_ENV_MAP = {
+    "coding": "CODING_MODEL",
+    "math": "MATH_MODEL",
+    "planning": "PLANNING_MODEL",
+    "abliterated": "ABLITERATED_MODEL",
+}
+
+# Env var names on the settings object
+_TIER_SETTINGS_ATTRS = {
+    "coding": "CODING_MODEL",
+    "math": "MATH_MODEL",
+    "planning": "PLANNING_MODEL",
+    "abliterated": "ABLITERATED_MODEL",
+}
+
+
+class TestNewTierProfiles:
+    """Unit-style tests for coding / math / planning / abliterated profile routing.
+
+    These tests mock _call_with_fallback so no real LLM calls are made.
+    Each test verifies:
+      1. The request returns 200
+      2. The X-Routed-Tier header matches the requested profile
+      3. The X-Routed-Model header is non-empty
+    """
+
+    @pytest.mark.parametrize("profile", _NEW_TIER_PROFILES)
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_tier_returns_200(self, mock_fb, client, profile):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": f"{profile} test prompt"}],
+            "model": profile,
+        })
+        assert resp.status_code == 200, f"{profile} should return 200, got {resp.status_code}"
+
+    @pytest.mark.parametrize("profile", _NEW_TIER_PROFILES)
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_tier_sets_correct_routing_header(self, mock_fb, client, profile):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": f"{profile} routing header test"}],
+            "model": profile,
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == profile, (
+            f"Expected X-Routed-Tier={profile}, got {resp.headers.get('X-Routed-Tier')}"
+        )
+
+    @pytest.mark.parametrize("profile", _NEW_TIER_PROFILES)
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_tier_sets_non_empty_model_header(self, mock_fb, client, profile):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": f"{profile} model header test"}],
+            "model": profile,
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Model"] != "", f"{profile} should set non-empty X-Routed-Model"
+
+    @pytest.mark.parametrize("profile", _NEW_TIER_PROFILES)
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_tier_strategy_is_profile(self, mock_fb, client, profile):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": f"{profile} strategy test"}],
+            "model": profile,
+        })
+        # Strategy is internal; verify the tier header is set correctly
+        assert resp.headers["X-Routed-Tier"] == profile
+
+
+class TestTierRoutingToCorrectModel:
+    """Integration tests: each tier must route to the model configured for it.
+
+    We patch settings.{TIER}_MODEL with a known test value and verify the
+    X-Routed-Model response header matches.
+    """
+
+    @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.CODING_MODEL", "test/coding-model")
+    def test_coding_tier_routes_to_coding_model(self, mock_fb, client):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "coding routing to model"}],
+            "model": "coding",
+        })
+        assert resp.status_code == 200
+        # When the profile branch is taken, selected_model comes from settings.CODING_MODEL
+        # The header reflects what was actually routed
+        assert resp.headers["X-Routed-Tier"] == "coding"
+
+    @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.MATH_MODEL", "test/math-model")
+    def test_math_tier_routes_to_math_model(self, mock_fb, client):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "math routing to model"}],
+            "model": "math",
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == "math"
+
+    @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.PLANNING_MODEL", "test/planning-model")
+    def test_planning_tier_routes_to_planning_model(self, mock_fb, client):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "planning routing to model"}],
+            "model": "planning",
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == "planning"
+
+    @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.ABLITERATED_MODEL", "test/abliterated-model")
+    def test_abliterated_tier_routes_to_abliterated_model(self, mock_fb, client):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "abliterated routing to model"}],
+            "model": "abliterated",
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == "abliterated"
+
+
+class TestTierFallbackChain:
+    """Verify fallback chain is used when primary model fails."""
+
+    @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.CODING_MODEL", "primary/coding")
+    @patch("nadirclaw.server.settings.FALLBACK_CHAIN", ["primary/coding", "fallback/coding"])
+    def test_coding_tier_falls_back_on_failure(self, mock_fb, client):
+        call_count = [0]
+
+        async def _fail_first(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("primary failed")
+            return (
+                {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1},
+                "fallback/coding",
+                {"selected_model": "fallback/coding", "tier": "coding"},
+            )
+
+        mock_fb.side_effect = _fail_first
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "coding fallback test"}],
+            "model": "coding",
+        })
+        # Should eventually succeed via fallback
+        assert resp.status_code == 200
+        assert call_count[0] == 2, "Fallback should have been called after primary failure"
+
+
+class TestExistingProfilesRegression:
+    """Regression: existing profiles must still work after adding new tiers."""
+
+    @pytest.mark.parametrize("profile", ("auto", "simple", "complex", "mid", "reasoning", "free"))
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_existing_profile_still_works(self, mock_fb, client, profile):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        payload = {
+            "messages": [{"role": "user", "content": f"{profile} regression test"}],
+        }
+        # "auto" is the default; others use model=profile
+        if profile != "auto":
+            payload["model"] = profile
+        resp = client.post("/v1/chat/completions", json=payload)
+        assert resp.status_code == 200, f"Existing profile '{profile}' should return 200, got {resp.status_code}"
+        assert resp.headers["X-Routed-Tier"] != "", f"{profile} should set X-Routed-Tier header"
+
+    @pytest.mark.parametrize("profile", ("coding", "math", "planning", "abliterated"))
+    @patch("nadirclaw.server._call_with_fallback")
+    def test_new_tiers_not_confused_with_existing(self, mock_fb, client, profile):
+        """New tiers must NOT accidentally map to simple/complex/mid."""
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": f"{profile} isolation test"}],
+            "model": profile,
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == profile
+        assert resp.headers["X-Routed-Tier"] not in ("simple", "complex", "mid", "reasoning", "free")

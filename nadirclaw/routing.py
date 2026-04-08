@@ -83,7 +83,7 @@ MODEL_ALIASES: Dict[str, str] = {
 # Routing profiles
 # ---------------------------------------------------------------------------
 
-ROUTING_PROFILES = {"auto", "eco", "premium", "free", "reasoning"}
+ROUTING_PROFILES = {"auto", "eco", "premium", "free", "reasoning", "coding", "math", "planning", "abliterated"}
 
 
 def resolve_profile(model_field: Optional[str]) -> Optional[str]:

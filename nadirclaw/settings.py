@@ -148,6 +148,26 @@ class Settings:
         return os.getenv("NADIRCLAW_FREE_MODEL", "") or self.SIMPLE_MODEL
 
     @property
+    def CODING_MODEL(self) -> str:
+        """Model for coding tasks. Falls back to COMPLEX_MODEL."""
+        return os.getenv("NADIRCLAW_CODING_MODEL", "") or self.COMPLEX_MODEL
+
+    @property
+    def MATH_MODEL(self) -> str:
+        """Model for math tasks. Falls back to COMPLEX_MODEL."""
+        return os.getenv("NADIRCLAW_MATH_MODEL", "") or self.COMPLEX_MODEL
+
+    @property
+    def PLANNING_MODEL(self) -> str:
+        """Model for planning tasks. Falls back to COMPLEX_MODEL."""
+        return os.getenv("NADIRCLAW_PLANNING_MODEL", "") or self.COMPLEX_MODEL
+
+    @property
+    def ABLITERATED_MODEL(self) -> str:
+        """Model for abliterated (no safety guardrails) tasks. Falls back to SIMPLE_MODEL."""
+        return os.getenv("NADIRCLAW_ABLITERATED_MODEL", "") or self.SIMPLE_MODEL
+
+    @property
     def FALLBACK_CHAIN(self) -> list[str]:
         """Ordered fallback chain. When a model fails, try the next one.
 
@@ -160,7 +180,7 @@ class Settings:
             return [m.strip() for m in raw.split(",") if m.strip()]
         # Default: deduplicated list of all configured tier models
         chain = []
-        for m in [self.COMPLEX_MODEL, self.MID_MODEL, self.SIMPLE_MODEL, self.REASONING_MODEL, self.FREE_MODEL]:
+        for m in [self.COMPLEX_MODEL, self.MID_MODEL, self.SIMPLE_MODEL, self.REASONING_MODEL, self.FREE_MODEL, self.CODING_MODEL, self.MATH_MODEL, self.PLANNING_MODEL, self.ABLITERATED_MODEL]:
             if m and m not in chain:
                 chain.append(m)
         return chain
