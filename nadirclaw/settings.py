@@ -2,15 +2,16 @@
 
 import logging
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
+from pathlib import Path
+
+from nadirclaw.paths import nadirclaw_credentials_path, nadirclaw_env_file, nadirclaw_log_dir
 
 _settings_logger = logging.getLogger(__name__)
 
-# Load .env from ~/.nadirclaw/.env if it exists
-_nadirclaw_dir = Path.home() / ".nadirclaw"
-_env_file = _nadirclaw_dir / ".env"
+# Load .env from the configured NadirClaw home if it exists
+_env_file = nadirclaw_env_file()
 if _env_file.exists():
     load_dotenv(_env_file)
 else:
@@ -131,11 +132,11 @@ class Settings:
 
     @property
     def LOG_DIR(self) -> Path:
-        return Path(os.getenv("NADIRCLAW_LOG_DIR", "~/.nadirclaw/logs")).expanduser()
+        return nadirclaw_log_dir()
 
     @property
     def CREDENTIALS_FILE(self) -> Path:
-        return Path.home() / ".nadirclaw" / "credentials.json"
+        return nadirclaw_credentials_path()
 
     @property
     def REASONING_MODEL(self) -> str:

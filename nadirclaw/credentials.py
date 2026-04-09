@@ -1,6 +1,6 @@
 """Credential storage and resolution for NadirClaw.
 
-Stores provider API keys/tokens in ~/.nadirclaw/credentials.json.
+Stores provider API keys/tokens in the configured NadirClaw home.
 Resolution chain: OpenClaw stored token (optional) → NadirClaw stored token → env var.
 Supports OAuth tokens with automatic refresh for all providers.
 OpenClaw integration is optional — NadirClaw works standalone.
@@ -14,6 +14,12 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional
+
+from nadirclaw.paths import (
+    nadirclaw_credentials_path,
+    openclaw_auth_profiles_path,
+    openclaw_legacy_config_path,
+)
 
 logger = logging.getLogger("nadirclaw")
 
@@ -55,7 +61,7 @@ _MODEL_PROVIDER_PATTERNS = {
 
 
 def _credentials_path() -> Path:
-    return Path.home() / ".nadirclaw" / "credentials.json"
+    return nadirclaw_credentials_path()
 
 
 def _read_credentials() -> dict:
@@ -176,7 +182,7 @@ for _oc, _nc in _OPENCLAW_PROVIDER_MAP.items():
 
 def _openclaw_auth_profiles_path() -> Path:
     """Return the path to OpenClaw's auth-profiles.json."""
-    return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+    return openclaw_auth_profiles_path()
 
 
 def _check_openclaw_with_refresh(provider: str) -> Optional[str]:
@@ -288,8 +294,8 @@ def _check_openclaw_with_refresh(provider: str) -> Optional[str]:
 
 
 def _check_openclaw(provider: str) -> Optional[str]:
-    """Check OpenClaw legacy config (~/.openclaw/openclaw.json) for a stored token."""
-    openclaw_path = Path.home() / ".openclaw" / "openclaw.json"
+    """Check the configured OpenClaw legacy config for a stored token."""
+    openclaw_path = openclaw_legacy_config_path()
     if not openclaw_path.exists():
         return None
 

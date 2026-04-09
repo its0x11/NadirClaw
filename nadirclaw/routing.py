@@ -256,6 +256,104 @@ def detect_reasoning(prompt: str, system_message: str = "") -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Complex sub-type detection (PR2)
+# ---------------------------------------------------------------------------
+
+# Keyword sets for sub-classifying complex prompts
+_CODING_KEYWORDS = [
+    "function", "def ", "class ", "import ", "from ",
+    ".py", ".js", ".ts", ".go", ".rs", ".java", ".cpp", ".c",
+    "()", "=>", "->", "const ", "let ", "var ",
+    "console.log", "print(", "return ",
+    "algorithm", "data structure", "O(n)", "time complexity",
+    "implement", "debug", "refactor", "syntax error",
+]
+
+_MATH_KEYWORDS = [
+    "equation", "solve for", "derivative", "integral",
+    "lim", "sum", "sigma", "matrix", "vector",
+    "calculus", "differential", "algebra", "geometry",
+    "x =", "y =", "z =", "theta", "phi", "pi",
+    "∫", "∑", "∂", "∇", "∈", "∀",
+    "polynomial", "quadratic", "logarithm", "exponential",
+]
+
+_PLANNING_KEYWORDS = [
+    "strategy", "roadmap", "plan", "goal",
+    "quarterly", "annual", "execute", "milestone",
+    "objective", "key result", "OKR", "stakeholder",
+    "timeline", "feature flag", "phase", "sprint",
+]
+
+_ABLITERATED_KEYWORDS = [
+    "ignore", "disregard", "forget", "previous",
+    "you are now", "pretend", "roleplay as",
+    "unfiltered", "no guidelines", "bypass",
+    "jailbreak", "DAN", "do anything now",
+]
+
+
+def classify_complex_subtype(prompt: str, word_count: int) -> str:
+    """Classify a complex-tier prompt into a sub-type.
+
+    When a prompt is routed as 'complex', this function determines which
+    specialized model to use: coding, math, planning, or abliterated.
+
+    Args:
+        prompt: The full prompt text (lower-cased for matching)
+        word_count: Number of words in the prompt
+
+    Returns:
+        Sub-type: 'coding' | 'math' | 'planning' | 'abliterated'
+
+    Priority:
+        1. abliterator always wins (binary filter)
+        2. highest keyword score (threshold >= 2)
+        3. planning requires word_count >= 200 (with >= 2 planning keywords)
+        4. tiebreak: coding > math > planning
+    """
+    prompt_lower = prompt.lower()
+
+    # Abliterator override — always takes precedence
+    if any(kw in prompt_lower for kw in _ABLITERATED_KEYWORDS):
+        return "abliterated"
+
+    # Count matches per category (keyword scoring)
+    coding_score = sum(1 for kw in _CODING_KEYWORDS if kw in prompt_lower)
+    math_score = sum(1 for kw in _MATH_KEYWORDS if kw in prompt_lower)
+    planning_score = sum(1 for kw in _PLANNING_KEYWORDS if kw in prompt_lower)
+
+    # Find highest score with tiebreak: coding > math > planning
+    scores = [
+        ("coding", coding_score),
+        ("math", math_score),
+        ("planning", planning_score),
+    ]
+    # Sort by score descending, then by priority (coding=0 > math=1 > planning=2)
+    # Lower index in priority list = higher priority
+    priority_order = ["coding", "math", "planning"]
+    scores.sort(key=lambda x: (-x[1], priority_order.index(x[0])))
+    best_name, best_score = scores[0]
+
+    # Short prompts (< 50 words): only route if strong signal (>= 4 matches), else planning
+    if word_count < 50:
+        if best_score >= 4:
+            return best_name
+        return "planning"
+
+    # Planning requires sufficient context (>= 200 words AND >= 2 planning keywords)
+    if planning_score >= 2 and word_count >= 200:
+        return "planning"
+
+    # Route to highest-scoring category if above threshold (>= 2 matches)
+    if best_score >= 2:
+        return best_name
+
+    # Default fallback for ambiguous/short complex prompts
+    return "planning"
+
+
+# ---------------------------------------------------------------------------
 # Context window check
 # ---------------------------------------------------------------------------
 
@@ -482,6 +580,27 @@ def apply_routing_modifiers(
             "Agentic override: simple → complex (confidence=%.2f, signals=%s)",
             agentic["confidence"], agentic["signals"],
         )
+
+    # --- Complex sub-type detection (coding/math/planning/abliterated) ---
+    if final_tier == "complex":
+        word_count = len(prompt_text.split())
+        if word_count >= 50:
+            complex_subtype = classify_complex_subtype(prompt_text, word_count)
+            if complex_subtype != "planning":
+                # Map sub-type to corresponding model
+                subtype_model_map = {
+                    "coding": settings.CODING_MODEL,
+                    "math": settings.MATH_MODEL,
+                    "planning": settings.PLANNING_MODEL,
+                    "abliterated": settings.ABLITERATED_MODEL,
+                }
+                final_model = subtype_model_map.get(complex_subtype, final_model)
+                final_tier = complex_subtype
+                routing_info["modifiers_applied"].append(f"complex_subtype_override({complex_subtype})")
+                logger.info(
+                    "Complex sub-type override: → %s (word_count=%d)",
+                    complex_subtype, word_count,
+                )
 
     # --- Reasoning detection ---
     prompt_text = ""

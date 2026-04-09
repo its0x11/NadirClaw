@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 import click
 
+from nadirclaw.paths import nadirclaw_env_file, nadirclaw_home
 from nadirclaw.routing import MODEL_REGISTRY
 
 # ---------------------------------------------------------------------------
@@ -97,8 +98,8 @@ _TIER_DEFAULTS = {
 }
 
 # Config directory
-CONFIG_DIR = Path.home() / ".nadirclaw"
-ENV_FILE = CONFIG_DIR / ".env"
+CONFIG_DIR = nadirclaw_home()
+ENV_FILE = nadirclaw_env_file()
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +416,7 @@ def print_welcome():
     click.echo("  2. Entering API keys or logging in via OAuth")
     click.echo("  3. Choosing models for each routing tier")
     click.echo()
-    click.echo("Your configuration will be saved to ~/.nadirclaw/.env")
+    click.echo(f"Your configuration will be saved to {ENV_FILE}")
     click.echo()
 
 
@@ -758,7 +759,7 @@ def write_env_file(
     api_keys: Optional[Dict[str, str]] = None,
     ollama_api_base: Optional[str] = None,
 ) -> Path:
-    """Write ~/.nadirclaw/.env with model configuration.
+    """Write the configured NadirClaw .env with model configuration.
 
     Creates backup of existing .env if present. Sets 0o600 permissions.
     Returns path to written file.

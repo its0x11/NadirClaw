@@ -451,6 +451,218 @@ def _strip_gemini_prefix(model: str) -> str:
     return model.removeprefix("gemini/")
 
 
+def _strip_openai_codex_prefix(model: str) -> str:
+    """Remove 'openai-codex/' prefix if present."""
+    return model.removeprefix("openai-codex/")
+
+
+def _openai_input_content(content: Any) -> List[Dict[str, Any]]:
+    """Convert Chat Completions-style message content into Responses API items."""
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "input_text", "text": content}]
+    if not isinstance(content, list):
+        return [{"type": "input_text", "text": str(content)}]
+
+    items: List[Dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            items.append({"type": "input_text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            items.append({"type": "input_text", "text": str(part)})
+            continue
+
+        part_type = part.get("type")
+        if part_type in ("text", "input_text"):
+            text = part.get("text")
+            if text is not None:
+                items.append({"type": "input_text", "text": text})
+        elif part_type in ("image_url", "input_image"):
+            image_value = part.get("image_url")
+            detail = part.get("detail")
+            image_url = image_value
+            if isinstance(image_value, dict):
+                image_url = image_value.get("url") or image_value.get("image_url")
+                detail = image_value.get("detail", detail)
+            if image_url:
+                image_item: Dict[str, Any] = {
+                    "type": "input_image",
+                    "image_url": image_url,
+                }
+                if detail:
+                    image_item["detail"] = detail
+                items.append(image_item)
+        elif part_type == "input_file":
+            file_item = {"type": "input_file"}
+            for key in ("file_id", "file_url", "filename", "file_data"):
+                if part.get(key) is not None:
+                    file_item[key] = part[key]
+            items.append(file_item)
+        else:
+            text = part.get("text")
+            if text is not None:
+                items.append({"type": "input_text", "text": text})
+    return items
+
+
+def _build_openai_response_input(request: "ChatCompletionRequest") -> List[Dict[str, Any]]:
+    """Convert the request message list into Responses API input items."""
+    items: List[Dict[str, Any]] = []
+    for message in request.messages:
+        extra_fields = message.model_extra or {}
+
+        if message.role == "tool":
+            tool_call_id = extra_fields.get("tool_call_id")
+            if tool_call_id:
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": message.text_content(),
+                })
+            continue
+
+        if message.role == "assistant":
+            tool_calls = extra_fields.get("tool_calls") or []
+            for tool_call in tool_calls:
+                function = tool_call.get("function") or {}
+                call_id = tool_call.get("id")
+                name = function.get("name")
+                arguments = function.get("arguments", "")
+                if call_id and name:
+                    items.append({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    })
+
+        content = _openai_input_content(message.content)
+        if content:
+            items.append({
+                "type": "message",
+                "role": message.role,
+                "content": content,
+            })
+
+    return items
+
+
+def _extract_openai_response_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a Responses API payload into NadirClaw's internal response shape."""
+    output = data.get("output") or []
+    content_parts: List[str] = []
+    thinking_parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+
+    for item in output:
+        item_type = item.get("type")
+        if item_type == "message" and item.get("role") == "assistant":
+            for content in item.get("content") or []:
+                content_type = content.get("type")
+                if content_type == "output_text":
+                    text = content.get("text")
+                    if text:
+                        content_parts.append(text)
+                elif content_type == "refusal":
+                    refusal = content.get("refusal")
+                    if refusal:
+                        content_parts.append(refusal)
+        elif item_type == "function_call":
+            tool_calls.append({
+                "id": item.get("call_id") or item.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
+                },
+            })
+        elif item_type == "reasoning":
+            for summary in item.get("summary") or []:
+                text = summary.get("text")
+                if text:
+                    thinking_parts.append(text)
+
+    usage = data.get("usage") or {}
+    output_details = usage.get("output_tokens_details") or {}
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    result: Dict[str, Any] = {
+        "content": data.get("output_text") or "".join(content_parts),
+        "finish_reason": finish_reason,
+        "prompt_tokens": usage.get("input_tokens", 0) or 0,
+        "completion_tokens": usage.get("output_tokens", 0) or 0,
+    }
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+    if thinking_parts:
+        result["thinking"] = "\n".join(thinking_parts)
+    reasoning_tokens = output_details.get("reasoning_tokens")
+    if isinstance(reasoning_tokens, int) and reasoning_tokens:
+        result["reasoning_tokens"] = reasoning_tokens
+    return result
+
+
+async def _call_openai_codex(
+    model: str,
+    request: "ChatCompletionRequest",
+) -> Dict[str, Any]:
+    """Call OpenAI's Responses API for OAuth-backed Codex models."""
+    import httpx
+
+    from nadirclaw.credentials import get_credential
+
+    api_key = get_credential("openai-codex")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="No OpenAI Codex credential configured. Run: nadirclaw auth openai login",
+        )
+
+    body: Dict[str, Any] = {
+        "model": _strip_openai_codex_prefix(model),
+        "input": _build_openai_response_input(request),
+    }
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
+    if request.max_tokens is not None:
+        body["max_output_tokens"] = request.max_tokens
+    if request.top_p is not None:
+        body["top_p"] = request.top_p
+
+    extra = request.model_extra or {}
+    if extra.get("tools"):
+        body["tools"] = extra["tools"]
+    if extra.get("tool_choice"):
+        body["tool_choice"] = extra["tool_choice"]
+    if extra.get("reasoning_effort"):
+        body["reasoning"] = {"effort": extra["reasoning_effort"]}
+    if extra.get("response_format"):
+        body["text"] = {"format": extra["response_format"]}
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+    if resp.status_code != 200:
+        error_detail = resp.text
+        logger.error("OpenAI Codex call failed (%s): %s", resp.status_code, error_detail)
+        if resp.status_code in (401, 403):
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI Codex authentication failed. Re-run: nadirclaw auth openai login",
+            )
+        resp.raise_for_status()
+
+    return _extract_openai_response_payload(resp.json())
+
+
 # Shared Gemini clients — reused across requests, keyed by API key.
 # A lock ensures concurrent requests with different keys don't race.
 _gemini_clients: Dict[str, Any] = {}
@@ -743,17 +955,15 @@ async def _call_litellm(
     provider: str | None,
 ) -> Dict[str, Any]:
     """Call a model via LiteLLM (Anthropic, OpenAI, Ollama, etc.)."""
+    if provider == "openai-codex":
+        return await _call_openai_codex(model, request)
+
     import litellm
 
     from nadirclaw.credentials import get_credential
 
-    # For openai-codex provider, strip the prefix and route as OpenAI model
-    if provider == "openai-codex":
-        litellm_model = model.removeprefix("openai-codex/")
-        cred_provider = "openai-codex"
-    else:
-        litellm_model = model
-        cred_provider = provider
+    litellm_model = model
+    cred_provider = provider
 
     # LiteLLM's "ollama/" provider uses /api/generate which doesn't support
     # tool calling. Automatically upgrade to "ollama_chat/" (which uses
@@ -1305,7 +1515,8 @@ async def chat_completions(
         # ------------------------------------------------------------------
         # TRUE STREAMING — bypass batch call, stream directly from provider
         # ------------------------------------------------------------------
-        if request.stream and not cache_hit:
+        supports_true_stream = provider != "openai-codex"
+        if request.stream and not cache_hit and supports_true_stream:
             from nadirclaw.budget import get_budget_tracker
             from nadirclaw.telemetry import trace_span
 
@@ -1601,12 +1812,8 @@ async def _stream_litellm(
 
     from nadirclaw.credentials import get_credential
 
-    if provider == "openai-codex":
-        litellm_model = model.removeprefix("openai-codex/")
-        cred_provider = "openai-codex"
-    else:
-        litellm_model = model
-        cred_provider = provider
+    litellm_model = model
+    cred_provider = provider
 
     req_extra = request.model_extra or {}
     if litellm_model.startswith("ollama/") and req_extra.get("tools"):

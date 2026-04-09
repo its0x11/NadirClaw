@@ -8,6 +8,8 @@ from pathlib import Path
 
 import click
 
+from nadirclaw.paths import codex_home, continue_home, cursor_home, openclaw_home
+
 
 @click.group()
 @click.version_option(version=None, prog_name="nadirclaw", package_name="nadirclaw")
@@ -997,7 +999,7 @@ def onboard():
     """Auto-configure OpenClaw to use NadirClaw as a provider."""
     from nadirclaw.settings import settings
 
-    openclaw_dir = Path.home() / ".openclaw"
+    openclaw_dir = openclaw_home()
     config_path = openclaw_dir / "openclaw.json"
 
     # Read existing config or start fresh
@@ -1100,7 +1102,7 @@ def onboard():
     """Auto-configure Codex to use NadirClaw as a provider."""
     from nadirclaw.settings import settings
 
-    codex_dir = Path.home() / ".codex"
+    codex_dir = codex_home()
     config_path = codex_dir / "config.toml"
 
     # Backup existing config if present
@@ -1180,7 +1182,7 @@ def onboard():
     """Auto-configure Continue to use NadirClaw as a provider."""
     from nadirclaw.settings import settings
 
-    config_dir = Path.home() / ".continue"
+    config_dir = continue_home()
     config_path = config_dir / "config.json"
 
     # Backup existing config if present
@@ -1247,7 +1249,7 @@ def onboard():
     """Auto-configure Cursor to use NadirClaw as an OpenAI-compatible provider."""
     from nadirclaw.settings import settings
 
-    cursor_dir = Path.home() / ".cursor"
+    cursor_dir = cursor_home()
     config_path = cursor_dir / "mcp.json"
 
     click.echo("\nCursor + NadirClaw Setup")
@@ -1299,8 +1301,9 @@ def discover(scan_network):
     click.echo(format_discovery_results(instances))
 
     if instances:
+        from nadirclaw.paths import nadirclaw_env_file
         click.echo()
-        click.echo("To use an instance, update your ~/.nadirclaw/.env:")
+        click.echo(f"To use an instance, update {nadirclaw_env_file()}:")
         click.echo(f"  OLLAMA_API_BASE={instances[0]['url']}")
 
 
