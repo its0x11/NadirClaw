@@ -47,6 +47,9 @@ class TestResolveProfile:
     def test_reasoning(self):
         assert resolve_profile("reasoning") == "reasoning"
 
+    def test_orchestrator(self):
+        assert resolve_profile("orchestrator") == "orchestrator"
+
     def test_nadirclaw_prefix(self):
         assert resolve_profile("nadirclaw/eco") == "eco"
         assert resolve_profile("nadirclaw/premium") == "premium"
@@ -342,7 +345,7 @@ class TestApplyRoutingModifiers:
         assert tier == "simple"
 
     def test_agentic_override(self):
-        """Agentic request overrides simple → complex."""
+        """Agentic request overrides simple → orchestrator when configured."""
         messages = [
             _msg("system", "You are a coding agent. You can use tools."),
             _msg("user", "Refactor this"),
@@ -355,6 +358,27 @@ class TestApplyRoutingModifiers:
             "has_tools": True, "tool_count": 4,
             "system_prompt_text": "You are a coding agent. You can use tools.",
             "system_prompt_length": 600, "message_count": 6,
+        }
+        model, tier, info = apply_routing_modifiers(
+            "gemini-flash", "simple", meta, messages, "gemini-flash", "gpt-4o",
+            orchestrator_model="openai-codex/gpt-5.4",
+        )
+        assert model == "openai-codex/gpt-5.4"
+        assert tier == "orchestrator"
+        assert "agentic_override" in info["modifiers_applied"]
+
+    def test_agentic_override_falls_back_to_complex_without_orchestrator(self):
+        """Agentic request still routes to complex when no orchestrator model is set."""
+        messages = [
+            _msg("system", "You are a coding agent. You can use tools."),
+            _msg("user", "Refactor this"),
+            _msg("assistant", "reading file"),
+            _msg("tool", "contents"),
+        ]
+        meta = {
+            "has_tools": True, "tool_count": 2,
+            "system_prompt_text": "You are a coding agent. You can use tools.",
+            "system_prompt_length": 600, "message_count": 4,
         }
         model, tier, info = apply_routing_modifiers(
             "gemini-flash", "simple", meta, messages, "gemini-flash", "gpt-4o",

@@ -159,6 +159,7 @@ tr:last-child td { border: none; }
 .tier-simple { background: #064e3b; color: #34d399; }
 .tier-complex { background: #4c1d95; color: #a78bfa; }
 .tier-reasoning { background: #78350f; color: #fbbf24; }
+.tier-orchestrator { background: #172554; color: #93c5fd; }
 .tier-direct { background: #1e293b; color: #94a3b8; }
 .tier-free { background: #1e3a2f; color: #6ee7b7; }
 .bar-wrap { display: flex; gap: 4px; height: 24px; border-radius: 6px; overflow: hidden; }
@@ -166,6 +167,7 @@ tr:last-child td { border: none; }
 .bar-simple { background: #34d399; }
 .bar-complex { background: #a78bfa; }
 .bar-reasoning { background: #fbbf24; }
+.bar-orchestrator { background: #60a5fa; }
 .bar-other { background: #4b5563; }
 .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
 .model-card { background: #1a1a24; border-radius: 12px; padding: 1rem 1.25rem; }
@@ -214,8 +216,8 @@ tr:last-child td { border: none; }
 </div>
 
 <script>
-const TIER_COLORS = { simple: '#34d399', complex: '#a78bfa', reasoning: '#fbbf24', direct: '#94a3b8', free: '#6ee7b7' };
-const TIER_CLASSES = { simple: 'tier-simple', complex: 'tier-complex', reasoning: 'tier-reasoning', direct: 'tier-direct', free: 'tier-free' };
+const TIER_COLORS = { simple: '#34d399', complex: '#a78bfa', reasoning: '#fbbf24', orchestrator: '#60a5fa', direct: '#94a3b8', free: '#6ee7b7' };
+const TIER_CLASSES = { simple: 'tier-simple', complex: 'tier-complex', reasoning: 'tier-reasoning', orchestrator: 'tier-orchestrator', direct: 'tier-direct', free: 'tier-free' };
 
 async function refresh() {
   try {

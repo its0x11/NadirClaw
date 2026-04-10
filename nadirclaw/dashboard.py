@@ -161,7 +161,7 @@ def run_dashboard_rich(log_path: Path, refresh: float = 2.0, db_path: Optional[P
         tier_table.add_column("%", justify="right")
 
         max_tier = max(tiers.values()) if tiers else 1
-        tier_colors = {"simple": "blue", "complex": "red", "reasoning": "magenta", "direct": "yellow"}
+        tier_colors = {"simple": "blue", "complex": "red", "reasoning": "magenta", "orchestrator": "cyan", "direct": "yellow"}
         for tier, count in sorted(tiers.items(), key=lambda x: x[1], reverse=True):
             pct = count / total * 100 if total > 0 else 0
             color = tier_colors.get(tier, "white")

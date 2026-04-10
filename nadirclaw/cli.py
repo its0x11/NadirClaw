@@ -1,6 +1,7 @@
 """NadirClaw CLI — serve, classify, onboard, and status commands."""
 
 import json
+import logging
 import os
 import shutil
 from datetime import datetime
@@ -43,8 +44,6 @@ def setup(reconfigure):
               help="Context optimization mode (default: off)")
 def serve(port, simple_model, complex_model, models, token, verbose, log_raw, optimize):
     """Start the NadirClaw router server."""
-    import logging
-
     from nadirclaw.setup import is_first_run
 
     if is_first_run():
@@ -70,21 +69,26 @@ def serve(port, simple_model, complex_model, models, token, verbose, log_raw, op
     if optimize:
         os.environ["NADIRCLAW_OPTIMIZE"] = optimize
 
-    log_level = "debug" if verbose else "info"
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
     import uvicorn
 
+    from nadirclaw.logging_utils import configure_logging
     from nadirclaw.settings import settings
+
+    log_level = "debug" if verbose else "info"
+    log_path = configure_logging(
+        log_dir=settings.LOG_DIR,
+        level=getattr(logging, log_level.upper()),
+        max_bytes=settings.LOG_MAX_BYTES,
+        backup_count=settings.LOG_BACKUP_COUNT,
+        console_mode=settings.LOG_TO_CONSOLE,
+    )
 
     actual_port = port or settings.PORT
     click.echo(f"Starting NadirClaw on port {actual_port}...")
     click.echo(f"  Simple model:  {settings.SIMPLE_MODEL}")
     click.echo(f"  Complex model: {settings.COMPLEX_MODEL}")
+    click.echo(f"  Server log:    {log_path}")
+    click.echo(f"  Request log:   {settings.LOG_DIR / 'requests.jsonl'}")
     if settings.OPTIMIZE != "off":
         click.echo(f"  Optimize:      {settings.OPTIMIZE}")
     uvicorn.run(
@@ -92,6 +96,7 @@ def serve(port, simple_model, complex_model, models, token, verbose, log_raw, op
         host="0.0.0.0",
         port=actual_port,
         log_level=log_level,
+        log_config=None,
     )
 
 
@@ -311,6 +316,84 @@ def dashboard(refresh):
     log_path = settings.LOG_DIR / "requests.jsonl"
     db_path = settings.LOG_DIR / "requests.db"
     run_dashboard(log_path, refresh=refresh, db_path=db_path)
+
+
+@main.group()
+def logs():
+    """Manage log files and request log storage."""
+    pass
+
+
+@logs.command("prune")
+@click.option("--compress-current/--no-compress-current", default=True, help="Compress oversized active logs before pruning backups")
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), help="Output format")
+def logs_prune(compress_current, fmt):
+    """Compress oversized logs and prune rotated backups."""
+    from nadirclaw.logging_utils import prune_log_dir
+    from nadirclaw.settings import settings
+
+    result = prune_log_dir(
+        settings.LOG_DIR,
+        default_max_bytes=settings.LEGACY_LOG_MAX_BYTES,
+        default_backup_count=settings.LEGACY_LOG_BACKUP_COUNT,
+        file_limits={
+            "server.log": {
+                "max_bytes": settings.LOG_MAX_BYTES,
+                "backup_count": settings.LOG_BACKUP_COUNT,
+            },
+            "requests.jsonl": {
+                "max_bytes": settings.REQUEST_LOG_MAX_BYTES,
+                "backup_count": settings.REQUEST_LOG_BACKUP_COUNT,
+            },
+            "nadirclaw.err.log": {
+                "max_bytes": settings.LEGACY_LOG_MAX_BYTES,
+                "backup_count": settings.LEGACY_LOG_BACKUP_COUNT,
+            },
+            "nadirclaw.out.log": {
+                "max_bytes": settings.LEGACY_LOG_MAX_BYTES,
+                "backup_count": settings.LEGACY_LOG_BACKUP_COUNT,
+            },
+        },
+        compress_current=compress_current,
+    )
+
+    if fmt == "json":
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    click.echo(f"Log dir:      {result['log_dir']}")
+    click.echo(f"Compressed:   {len(result['compressed'])}")
+    click.echo(f"Removed:      {result['removed']}")
+    for name in result["compressed"]:
+        click.echo(f"  {name}")
+
+
+@logs.command("vacuum")
+@click.option("--since", default=None, help="Delete request rows older than this cutoff before vacuuming, e.g. '30d'")
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), help="Output format")
+def logs_vacuum(since, fmt):
+    """Vacuum the SQLite request log database, optionally pruning old rows first."""
+    from nadirclaw.logging_utils import vacuum_sqlite_db
+    from nadirclaw.report import parse_since
+    from nadirclaw.settings import settings
+
+    prune_before = None
+    if since:
+        try:
+            prune_before = parse_since(since)
+        except ValueError as e:
+            click.echo(f"Error: {e}")
+            raise SystemExit(1)
+
+    result = vacuum_sqlite_db(settings.LOG_DIR / "requests.db", prune_before=prune_before)
+
+    if fmt == "json":
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    click.echo(f"DB:           {result['db_path']}")
+    click.echo(f"Rows deleted: {result['rows_deleted']}")
+    click.echo(f"Vacuumed:     {'yes' if result['vacuumed'] else 'no'}")
 
 
 @main.command()

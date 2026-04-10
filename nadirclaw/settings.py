@@ -135,6 +135,60 @@ class Settings:
         return nadirclaw_log_dir()
 
     @property
+    def LOG_TO_CONSOLE(self) -> str:
+        """Console logging mode: auto, true, or false."""
+        raw = os.getenv("NADIRCLAW_LOG_TO_CONSOLE", "auto").strip().lower()
+        return raw if raw in ("auto", "true", "false", "1", "0", "yes", "no", "on", "off") else "auto"
+
+    @property
+    def LOG_MAX_BYTES(self) -> int:
+        """Max size of the rotated server log before rollover."""
+        try:
+            return max(1_048_576, int(os.getenv("NADIRCLAW_LOG_MAX_BYTES", str(50 * 1024 * 1024))))
+        except ValueError:
+            return 50 * 1024 * 1024
+
+    @property
+    def LOG_BACKUP_COUNT(self) -> int:
+        """Number of compressed server log backups to retain."""
+        try:
+            return max(1, int(os.getenv("NADIRCLAW_LOG_BACKUP_COUNT", "10")))
+        except ValueError:
+            return 10
+
+    @property
+    def REQUEST_LOG_MAX_BYTES(self) -> int:
+        """Max size of requests.jsonl before rollover."""
+        try:
+            return max(1_048_576, int(os.getenv("NADIRCLAW_REQUEST_LOG_MAX_BYTES", str(100 * 1024 * 1024))))
+        except ValueError:
+            return 100 * 1024 * 1024
+
+    @property
+    def REQUEST_LOG_BACKUP_COUNT(self) -> int:
+        """Number of compressed request log backups to retain."""
+        try:
+            return max(1, int(os.getenv("NADIRCLAW_REQUEST_LOG_BACKUP_COUNT", "20")))
+        except ValueError:
+            return 20
+
+    @property
+    def LEGACY_LOG_MAX_BYTES(self) -> int:
+        """Prune threshold for unmanaged legacy logs such as launch-agent stdout/stderr."""
+        try:
+            return max(10 * 1024 * 1024, int(os.getenv("NADIRCLAW_LEGACY_LOG_MAX_BYTES", str(200 * 1024 * 1024))))
+        except ValueError:
+            return 200 * 1024 * 1024
+
+    @property
+    def LEGACY_LOG_BACKUP_COUNT(self) -> int:
+        """Retention count for compressed backups of unmanaged legacy logs."""
+        try:
+            return max(1, int(os.getenv("NADIRCLAW_LEGACY_LOG_BACKUP_COUNT", "10")))
+        except ValueError:
+            return 10
+
+    @property
     def CREDENTIALS_FILE(self) -> Path:
         return nadirclaw_credentials_path()
 
@@ -152,6 +206,11 @@ class Settings:
     def CODING_MODEL(self) -> str:
         """Model for coding tasks. Falls back to COMPLEX_MODEL."""
         return os.getenv("NADIRCLAW_CODING_MODEL", "") or self.COMPLEX_MODEL
+
+    @property
+    def ORCHESTRATOR_MODEL(self) -> str:
+        """Model for orchestration/agentic tasks. Falls back to COMPLEX_MODEL."""
+        return os.getenv("NADIRCLAW_ORCHESTRATOR_MODEL", "") or self.COMPLEX_MODEL
 
     @property
     def MATH_MODEL(self) -> str:
@@ -181,7 +240,7 @@ class Settings:
             return [m.strip() for m in raw.split(",") if m.strip()]
         # Default: deduplicated list of all configured tier models
         chain = []
-        for m in [self.COMPLEX_MODEL, self.MID_MODEL, self.SIMPLE_MODEL, self.REASONING_MODEL, self.FREE_MODEL, self.CODING_MODEL, self.MATH_MODEL, self.PLANNING_MODEL, self.ABLITERATED_MODEL]:
+        for m in [self.ORCHESTRATOR_MODEL, self.COMPLEX_MODEL, self.MID_MODEL, self.SIMPLE_MODEL, self.REASONING_MODEL, self.FREE_MODEL, self.CODING_MODEL, self.MATH_MODEL, self.PLANNING_MODEL, self.ABLITERATED_MODEL]:
             if m and m not in chain:
                 chain.append(m)
         return chain
@@ -193,6 +252,7 @@ class Settings:
           NADIRCLAW_SIMPLE_FALLBACK=gemini-2.5-flash,gemini-3-flash-preview
           NADIRCLAW_MID_FALLBACK=gpt-4.1-mini,gemini-2.5-flash
           NADIRCLAW_COMPLEX_FALLBACK=claude-sonnet-4-5-20250929,gpt-4.1
+          NADIRCLAW_ORCHESTRATOR_FALLBACK=openai-codex/gpt-5.4,claude-sonnet-4-5-20250929
 
         When a per-tier chain is set, it is used instead of the global chain.
         If no per-tier chain is configured, falls back to the global FALLBACK_CHAIN.

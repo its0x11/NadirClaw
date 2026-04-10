@@ -131,13 +131,14 @@ class TestRoutingHeaders:
 
 
 # ---------------------------------------------------------------------------
-# NMT-008 — Tests for 4 new tier profiles (coding, math, planning, abliterated)
+# NMT-008 — Tests for specialized tier profiles
 # ---------------------------------------------------------------------------
 
-_NEW_TIER_PROFILES = ("coding", "math", "planning", "abliterated")
+_NEW_TIER_PROFILES = ("orchestrator", "coding", "math", "planning", "abliterated")
 
 # Expected env var suffixes per tier (maps profile → env var suffix)
 _TIER_ENV_MAP = {
+    "orchestrator": "ORCHESTRATOR_MODEL",
     "coding": "CODING_MODEL",
     "math": "MATH_MODEL",
     "planning": "PLANNING_MODEL",
@@ -146,6 +147,7 @@ _TIER_ENV_MAP = {
 
 # Env var names on the settings object
 _TIER_SETTINGS_ATTRS = {
+    "orchestrator": "ORCHESTRATOR_MODEL",
     "coding": "CODING_MODEL",
     "math": "MATH_MODEL",
     "planning": "PLANNING_MODEL",
@@ -154,7 +156,7 @@ _TIER_SETTINGS_ATTRS = {
 
 
 class TestNewTierProfiles:
-    """Unit-style tests for coding / math / planning / abliterated profile routing.
+    """Unit-style tests for specialized profile routing.
 
     These tests mock _call_with_fallback so no real LLM calls are made.
     Each test verifies:
@@ -217,6 +219,17 @@ class TestTierRoutingToCorrectModel:
     """
 
     @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.ORCHESTRATOR_MODEL", "test/orchestrator-model")
+    def test_orchestrator_tier_routes_to_orchestrator_model(self, mock_fb, client):
+        mock_fb.side_effect = _mock_fallback(content="ok")
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "orchestrator routing to model"}],
+            "model": "orchestrator",
+        })
+        assert resp.status_code == 200
+        assert resp.headers["X-Routed-Tier"] == "orchestrator"
+
+    @patch("nadirclaw.server._call_with_fallback")
     @patch("nadirclaw.server.settings.CODING_MODEL", "test/coding-model")
     def test_coding_tier_routes_to_coding_model(self, mock_fb, client):
         mock_fb.side_effect = _mock_fallback(content="ok")
@@ -267,6 +280,29 @@ class TestTierFallbackChain:
     """Verify fallback chain is used when primary model fails."""
 
     @patch("nadirclaw.server._call_with_fallback")
+    @patch("nadirclaw.server.settings.ORCHESTRATOR_MODEL", "primary/orchestrator")
+    def test_orchestrator_tier_falls_back_on_failure(self, mock_fb, client):
+        call_count = [0]
+
+        async def _fail_first(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("primary failed")
+            return (
+                {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1},
+                "fallback/orchestrator",
+                {"selected_model": "fallback/orchestrator", "tier": "orchestrator"},
+            )
+
+        mock_fb.side_effect = _fail_first
+        resp = client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "orchestrator fallback test"}],
+            "model": "orchestrator",
+        })
+        assert resp.status_code == 200
+        assert call_count[0] == 2
+
+    @patch("nadirclaw.server._call_with_fallback")
     @patch("nadirclaw.server.settings.CODING_MODEL", "primary/coding")
     @patch("nadirclaw.server.settings.FALLBACK_CHAIN", ["primary/coding", "fallback/coding"])
     def test_coding_tier_falls_back_on_failure(self, mock_fb, client):
@@ -309,7 +345,7 @@ class TestExistingProfilesRegression:
         assert resp.status_code == 200, f"Existing profile '{profile}' should return 200, got {resp.status_code}"
         assert resp.headers["X-Routed-Tier"] != "", f"{profile} should set X-Routed-Tier header"
 
-    @pytest.mark.parametrize("profile", ("coding", "math", "planning", "abliterated"))
+    @pytest.mark.parametrize("profile", ("orchestrator", "coding", "math", "planning", "abliterated"))
     @patch("nadirclaw.server._call_with_fallback")
     def test_new_tiers_not_confused_with_existing(self, mock_fb, client, profile):
         """New tiers must NOT accidentally map to simple/complex/mid."""

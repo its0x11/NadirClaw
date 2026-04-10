@@ -149,7 +149,7 @@ fi
 # Install package
 info "Installing dependencies (this may take a minute)..."
 "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install --quiet -e "$INSTALL_DIR"
+"$INSTALL_DIR/venv/bin/pip" install --quiet "$INSTALL_DIR"
 
 # ── Create CLI wrapper ───────────────────────────────────────
 

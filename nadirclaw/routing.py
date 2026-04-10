@@ -12,6 +12,8 @@ from collections import OrderedDict
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
+from nadirclaw.settings import settings
+
 logger = logging.getLogger("nadirclaw.routing")
 
 # ---------------------------------------------------------------------------
@@ -83,7 +85,7 @@ MODEL_ALIASES: Dict[str, str] = {
 # Routing profiles
 # ---------------------------------------------------------------------------
 
-ROUTING_PROFILES = {"auto", "eco", "premium", "free", "reasoning", "coding", "math", "planning", "abliterated"}
+ROUTING_PROFILES = {"auto", "eco", "premium", "free", "reasoning", "orchestrator", "coding", "math", "planning", "abliterated"}
 
 
 def resolve_profile(model_field: Optional[str]) -> Optional[str]:
@@ -545,6 +547,7 @@ def apply_routing_modifiers(
     messages: List[Any],
     simple_model: str,
     complex_model: str,
+    orchestrator_model: Optional[str] = None,
     reasoning_model: Optional[str] = None,
     free_model: Optional[str] = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
@@ -561,6 +564,16 @@ def apply_routing_modifiers(
     final_model = base_model
     final_tier = base_tier
 
+    prompt_text = ""
+    system_text = ""
+    for m in messages:
+        role = getattr(m, "role", "")
+        text = getattr(m, "text_content", lambda: "")()
+        if role == "user":
+            prompt_text = text
+        elif role in ("system", "developer"):
+            system_text = text
+
     # --- Agentic detection ---
     agentic = detect_agentic(
         messages=messages,
@@ -573,12 +586,12 @@ def apply_routing_modifiers(
     routing_info["agentic"] = agentic
 
     if agentic["is_agentic"] and final_tier == "simple":
-        final_model = complex_model
-        final_tier = "complex"
+        final_model = orchestrator_model or complex_model
+        final_tier = "orchestrator" if orchestrator_model else "complex"
         routing_info["modifiers_applied"].append("agentic_override")
         logger.info(
-            "Agentic override: simple → complex (confidence=%.2f, signals=%s)",
-            agentic["confidence"], agentic["signals"],
+            "Agentic override: simple → %s (confidence=%.2f, signals=%s)",
+            final_tier, agentic["confidence"], agentic["signals"],
         )
 
     # --- Complex sub-type detection (coding/math/planning/abliterated) ---
@@ -603,16 +616,6 @@ def apply_routing_modifiers(
                 )
 
     # --- Reasoning detection ---
-    prompt_text = ""
-    system_text = ""
-    for m in messages:
-        role = getattr(m, "role", "")
-        text = getattr(m, "text_content", lambda: "")()
-        if role == "user":
-            prompt_text = text
-        elif role in ("system", "developer"):
-            system_text = text
-
     reasoning = detect_reasoning(prompt_text, system_text)
     routing_info["reasoning"] = reasoning
 

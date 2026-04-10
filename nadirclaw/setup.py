@@ -92,6 +92,12 @@ _TIER_DEFAULTS = {
         "anthropic": "claude-sonnet-4-5-20250929",
         "google": "gemini-2.5-pro",
     },
+    "orchestrator": {
+        "openai": "openai-codex/gpt-5.3-codex",
+        "anthropic": "claude-sonnet-4-5-20250929",
+        "google": "gemini-2.5-pro",
+        "deepseek": "deepseek/deepseek-reasoner",
+    },
     "free": {
         "ollama": "ollama/llama3.1:8b",
     },
@@ -606,7 +612,7 @@ def get_available_models_for_providers(
             When provided, these are used as the primary source.
             Falls back to MODEL_REGISTRY for providers with no fetched models.
 
-    Returns dict with keys: simple, complex, reasoning, free.
+    Returns dict with keys: simple, complex, reasoning, orchestrator, free.
     Each value is a list of dicts: {model, provider}.
     """
     all_models: List[dict] = []
@@ -644,12 +650,23 @@ def get_available_models_for_providers(
         "simple": [],
         "complex": [],
         "reasoning": [],
+        "orchestrator": [],
         "free": [],
     }
 
     for m in all_models:
         tier = classify_model_tier(m["model"])
         tiers[tier].append(m)
+
+    # Orchestrator-capable models are currently sourced from premium/reasoning
+    # models rather than a separate provider taxonomy.
+    orchestrator_models = []
+    seen_orchestrator = set()
+    for candidate in tiers["complex"] + tiers["reasoning"]:
+        if candidate["model"] not in seen_orchestrator:
+            seen_orchestrator.add(candidate["model"])
+            orchestrator_models.append(candidate)
+    tiers["orchestrator"] = orchestrator_models
 
     # Sort each tier alphabetically
     for tier in tiers.values():
@@ -680,6 +697,7 @@ def format_model_table(models: List[dict], tier: str) -> str:
         "simple": "Simple model (cheap/fast)",
         "complex": "Complex model (premium)",
         "reasoning": "Reasoning model (chain-of-thought)",
+        "orchestrator": "Orchestrator model (agentic/tool-heavy)",
         "free": "Free model (zero cost)",
     }
     lines = [f"\n{tier_labels.get(tier, tier)}:"]
@@ -722,7 +740,7 @@ def prompt_model_selection(tier: str, models: List[dict], providers: List[str]) 
             default_idx = str(i)
             break
 
-    is_optional = tier in ("reasoning", "free")
+    is_optional = tier in ("reasoning", "orchestrator", "free")
     prompt_text = f"Select [1-{len(models)}]"
     if is_optional:
         prompt_text += " or 's' to skip"
@@ -755,6 +773,7 @@ def write_env_file(
     simple: str,
     complex_model: str,
     reasoning: Optional[str] = None,
+    orchestrator: Optional[str] = None,
     free: Optional[str] = None,
     api_keys: Optional[Dict[str, str]] = None,
     ollama_api_base: Optional[str] = None,
@@ -794,6 +813,8 @@ def write_env_file(
     lines.append(f"NADIRCLAW_COMPLEX_MODEL={complex_model}")
     if reasoning:
         lines.append(f"NADIRCLAW_REASONING_MODEL={reasoning}")
+    if orchestrator:
+        lines.append(f"NADIRCLAW_ORCHESTRATOR_MODEL={orchestrator}")
     if free:
         lines.append(f"NADIRCLAW_FREE_MODEL={free}")
     lines.append("")
@@ -823,6 +844,7 @@ def print_summary(
     simple: str,
     complex_model: str,
     reasoning: Optional[str],
+    orchestrator: Optional[str],
     free: Optional[str],
 ):
     """Print configuration summary and next steps."""
@@ -837,6 +859,8 @@ def print_summary(
     click.echo(f"    Complex model: {complex_model}")
     if reasoning:
         click.echo(f"    Reasoning:     {reasoning}")
+    if orchestrator:
+        click.echo(f"    Orchestrator:  {orchestrator}")
     if free:
         click.echo(f"    Free model:    {free}")
     click.echo(f"    Config file:   {ENV_FILE}")
@@ -965,6 +989,11 @@ def run_setup_wizard(reconfigure: bool = False):
     if tiers["reasoning"]:
         reasoning_model = prompt_model_selection("reasoning", tiers["reasoning"], providers)
 
+    # Orchestrator (optional)
+    orchestrator_model = None
+    if tiers["orchestrator"]:
+        orchestrator_model = prompt_model_selection("orchestrator", tiers["orchestrator"], providers)
+
     # Free (optional)
     free_model = None
     if tiers["free"]:
@@ -980,10 +1009,11 @@ def run_setup_wizard(reconfigure: bool = False):
         simple=simple_model,
         complex_model=complex_model,
         reasoning=reasoning_model,
+        orchestrator=orchestrator_model,
         free=free_model,
         api_keys=api_keys,
         ollama_api_base=ollama_api_base,
     )
     click.echo(f"  Wrote {env_path}")
 
-    print_summary(providers, simple_model, complex_model, reasoning_model, free_model)
+    print_summary(providers, simple_model, complex_model, reasoning_model, orchestrator_model, free_model)

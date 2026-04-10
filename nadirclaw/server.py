@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from nadirclaw import __version__
 from nadirclaw.auth import UserSession, validate_local_auth
+from nadirclaw.logging_utils import get_request_jsonl_logger
 from nadirclaw.settings import settings
 
 logger = logging.getLogger("nadirclaw")
@@ -172,9 +173,6 @@ class ClassifyBatchRequest(BaseModel):
 # Logging helper
 # ---------------------------------------------------------------------------
 
-_log_lock = Lock()
-
-
 def _log_request(entry: Dict[str, Any]) -> None:
     """Append a JSON line to the request log and print to console."""
     log_dir = settings.LOG_DIR
@@ -182,10 +180,12 @@ def _log_request(entry: Dict[str, Any]) -> None:
     request_log = log_dir / "requests.jsonl"
 
     entry["timestamp"] = datetime.now(timezone.utc).isoformat()
-    line = json.dumps(entry, default=str) + "\n"
-    with _log_lock:
-        with open(request_log, "a") as f:
-            f.write(line)
+    line = json.dumps(entry, default=str)
+    get_request_jsonl_logger(
+        path=request_log,
+        max_bytes=settings.REQUEST_LOG_MAX_BYTES,
+        backup_count=settings.REQUEST_LOG_BACKUP_COUNT,
+    ).info(line)
 
     # Also log to SQLite
     from nadirclaw.request_logger import log_request as sqlite_log
@@ -250,10 +250,12 @@ async def startup():
     log_dir = settings.LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
     request_log = log_dir / "requests.jsonl"
+    server_log = log_dir / "server.log"
 
     logger.info("=" * 60)
     logger.info("NadirClaw starting...")
-    logger.info("Log file: %s", request_log.resolve())
+    logger.info("Server log: %s", server_log.resolve())
+    logger.info("Request log: %s", request_log.resolve())
     logger.info("=" * 60)
 
     # Optional OpenTelemetry
@@ -456,29 +458,45 @@ def _strip_openai_codex_prefix(model: str) -> str:
     return model.removeprefix("openai-codex/")
 
 
-def _openai_input_content(content: Any) -> List[Dict[str, Any]]:
-    """Convert Chat Completions-style message content into Responses API items."""
+def _looks_like_openai_api_key(token: str) -> bool:
+    """Best-effort check for a first-class OpenAI API key."""
+    return token.startswith("sk-")
+
+
+_DEFAULT_CODEX_INSTRUCTIONS = (
+    "You are Codex, a coding assistant. Follow the user's instructions, "
+    "respect tool outputs, and provide direct, accurate help."
+)
+
+
+def _openai_input_content(content: Any, *, role: str = "user") -> List[Dict[str, Any]]:
+    """Convert Chat Completions-style message content into Responses/Codex items."""
+    text_type = "output_text" if role == "assistant" else "input_text"
     if content is None:
         return []
     if isinstance(content, str):
-        return [{"type": "input_text", "text": content}]
+        return [{"type": text_type, "text": content}]
     if not isinstance(content, list):
-        return [{"type": "input_text", "text": str(content)}]
+        return [{"type": text_type, "text": str(content)}]
 
     items: List[Dict[str, Any]] = []
     for part in content:
         if isinstance(part, str):
-            items.append({"type": "input_text", "text": part})
+            items.append({"type": text_type, "text": part})
             continue
         if not isinstance(part, dict):
-            items.append({"type": "input_text", "text": str(part)})
+            items.append({"type": text_type, "text": str(part)})
             continue
 
         part_type = part.get("type")
-        if part_type in ("text", "input_text"):
+        if part_type in ("text", "input_text", "output_text"):
             text = part.get("text")
             if text is not None:
-                items.append({"type": "input_text", "text": text})
+                items.append({"type": text_type, "text": text})
+        elif part_type == "refusal":
+            refusal = part.get("refusal")
+            if refusal is not None:
+                items.append({"type": "refusal", "refusal": refusal})
         elif part_type in ("image_url", "input_image"):
             image_value = part.get("image_url")
             detail = part.get("detail")
@@ -503,8 +521,30 @@ def _openai_input_content(content: Any) -> List[Dict[str, Any]]:
         else:
             text = part.get("text")
             if text is not None:
-                items.append({"type": "input_text", "text": text})
+                items.append({"type": text_type, "text": text})
     return items
+
+
+def _build_openai_codex_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Translate Chat Completions tools into Codex/Responses tool schema."""
+    converted: List[Dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function":
+            fn = tool.get("function") or {}
+            name = fn.get("name")
+            if not name:
+                continue
+            converted.append({
+                "type": "function",
+                "name": name,
+                "description": fn.get("description", ""),
+                "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+        else:
+            converted.append(tool)
+    return converted
 
 
 def _build_openai_response_input(request: "ChatCompletionRequest") -> List[Dict[str, Any]]:
@@ -512,6 +552,11 @@ def _build_openai_response_input(request: "ChatCompletionRequest") -> List[Dict[
     items: List[Dict[str, Any]] = []
     for message in request.messages:
         extra_fields = message.model_extra or {}
+
+        if message.role == "system":
+            # Codex backend expects top-level `instructions` rather than system
+            # messages in the conversation input.
+            continue
 
         if message.role == "tool":
             tool_call_id = extra_fields.get("tool_call_id")
@@ -538,7 +583,7 @@ def _build_openai_response_input(request: "ChatCompletionRequest") -> List[Dict[
                         "arguments": arguments,
                     })
 
-        content = _openai_input_content(message.content)
+        content = _openai_input_content(message.content, role=message.role)
         if content:
             items.append({
                 "type": "message",
@@ -547,6 +592,18 @@ def _build_openai_response_input(request: "ChatCompletionRequest") -> List[Dict[
             })
 
     return items
+
+
+def _build_openai_codex_instructions(request: "ChatCompletionRequest") -> str:
+    """Build the top-level Codex instructions string."""
+    parts = [
+        m.text_content().strip()
+        for m in request.messages
+        if m.role == "system" and m.text_content().strip()
+    ]
+    if parts:
+        return "\n\n".join(parts)
+    return _DEFAULT_CODEX_INSTRUCTIONS
 
 
 def _extract_openai_response_payload(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -603,14 +660,49 @@ def _extract_openai_response_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _merge_codex_tool_call(
+    tool_calls: Dict[str, Dict[str, Any]],
+    *,
+    item_id: str = "",
+    call_id: str = "",
+    name: str = "",
+    arguments: Optional[str] = None,
+) -> str:
+    """Upsert a tool call parsed from Codex streaming events."""
+    key = item_id or call_id or str(len(tool_calls))
+    entry = tool_calls.setdefault(
+        key,
+        {
+            "id": call_id or item_id or key,
+            "type": "function",
+            "function": {
+                "name": "",
+                "arguments": "",
+            },
+        },
+    )
+    if call_id and not entry.get("id"):
+        entry["id"] = call_id
+    function = entry.setdefault("function", {})
+    if name and not function.get("name"):
+        function["name"] = name
+    if arguments is not None:
+        function["arguments"] = arguments
+    return key
+
+
 async def _call_openai_codex(
     model: str,
     request: "ChatCompletionRequest",
 ) -> Dict[str, Any]:
-    """Call OpenAI's Responses API for OAuth-backed Codex models."""
+    """Call the correct OpenAI backend for Codex models.
+
+    ChatGPT/Codex OAuth tokens are valid for the Codex backend on chatgpt.com,
+    while first-class API keys should use the public Responses API.
+    """
     import httpx
 
-    from nadirclaw.credentials import get_credential
+    from nadirclaw.credentials import get_credential, get_credential_source
 
     api_key = get_credential("openai-codex")
     if not api_key:
@@ -619,9 +711,19 @@ async def _call_openai_codex(
             detail="No OpenAI Codex credential configured. Run: nadirclaw auth openai login",
         )
 
+    cred_source = get_credential_source("openai-codex") or "unknown"
+    use_public_api = _looks_like_openai_api_key(api_key)
+    endpoint = (
+        "https://api.openai.com/v1/responses"
+        if use_public_api
+        else "https://chatgpt.com/backend-api/codex/responses"
+    )
+
     body: Dict[str, Any] = {
         "model": _strip_openai_codex_prefix(model),
+        "instructions": _build_openai_codex_instructions(request),
         "input": _build_openai_response_input(request),
+        "store": False,
     }
     if request.temperature is not None:
         body["temperature"] = request.temperature
@@ -632,7 +734,7 @@ async def _call_openai_codex(
 
     extra = request.model_extra or {}
     if extra.get("tools"):
-        body["tools"] = extra["tools"]
+        body["tools"] = _build_openai_codex_tools(extra["tools"])
     if extra.get("tool_choice"):
         body["tool_choice"] = extra["tool_choice"]
     if extra.get("reasoning_effort"):
@@ -640,27 +742,197 @@ async def _call_openai_codex(
     if extra.get("response_format"):
         body["text"] = {"format": extra["response_format"]}
 
+    if use_public_api:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+
+        if resp.status_code != 200:
+            error_detail = resp.text
+            logger.error(
+                "OpenAI Codex call failed (%s, source=%s, public_api=%s): %s",
+                resp.status_code,
+                cred_source,
+                use_public_api,
+                error_detail,
+            )
+            if resp.status_code == 429:
+                raise RateLimitExhausted(model=model, retry_after=60)
+            if resp.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=500,
+                    detail="OpenAI Codex authentication failed. Re-run: nadirclaw auth openai login",
+                )
+            resp.raise_for_status()
+
+        return _extract_openai_response_payload(resp.json())
+
+    body["stream"] = True
+
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/responses",
+        async with client.stream(
+            "POST",
+            endpoint,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json=body,
-        )
+        ) as resp:
+            if resp.status_code != 200:
+                error_detail = await resp.aread()
+                error_text = error_detail.decode("utf-8", errors="replace")
+                logger.error(
+                    "OpenAI Codex call failed (%s, source=%s, public_api=%s): %s",
+                    resp.status_code,
+                    cred_source,
+                    use_public_api,
+                    error_text,
+                )
+                if resp.status_code == 429:
+                    raise RateLimitExhausted(model=model, retry_after=60)
+                if resp.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=500,
+                        detail="OpenAI Codex authentication failed. Re-run: nadirclaw auth openai login",
+                    )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"OpenAI Codex request failed: {error_text}",
+                )
 
-    if resp.status_code != 200:
-        error_detail = resp.text
-        logger.error("OpenAI Codex call failed (%s): %s", resp.status_code, error_detail)
-        if resp.status_code in (401, 403):
-            raise HTTPException(
-                status_code=500,
-                detail="OpenAI Codex authentication failed. Re-run: nadirclaw auth openai login",
-            )
-        resp.raise_for_status()
+            text_parts: List[str] = []
+            thinking_parts: List[str] = []
+            tool_calls: Dict[str, Dict[str, Any]] = {}
+            prompt_tokens = 0
+            completion_tokens = 0
+            reasoning_tokens = 0
+            completed_response: Optional[Dict[str, Any]] = None
 
-    return _extract_openai_response_payload(resp.json())
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type", "")
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if delta:
+                        text_parts.append(delta)
+                elif event_type == "response.output_text.done":
+                    text = event.get("text")
+                    if text:
+                        text_parts.append(text)
+                elif event_type == "response.content_part.done":
+                    part = event.get("part") or {}
+                    if part.get("type") == "output_text" and part.get("text"):
+                        text_parts.append(part["text"])
+                elif event_type == "response.reasoning_summary_text.delta":
+                    delta = event.get("delta")
+                    if delta:
+                        thinking_parts.append(delta)
+                elif event_type == "response.reasoning_summary_text.done":
+                    text = event.get("text")
+                    if text:
+                        thinking_parts.append(text)
+                elif event_type in ("response.output_item.added", "response.output_item.done"):
+                    item = event.get("item") or {}
+                    if item.get("type") == "function_call":
+                        _merge_codex_tool_call(
+                            tool_calls,
+                            item_id=event.get("item_id") or item.get("id", ""),
+                            call_id=item.get("call_id") or item.get("id", ""),
+                            name=item.get("name", ""),
+                            arguments=item.get("arguments"),
+                        )
+                elif event_type == "response.function_call_arguments.delta":
+                    item_id = event.get("item_id") or event.get("call_id") or ""
+                    key = _merge_codex_tool_call(
+                        tool_calls,
+                        item_id=item_id,
+                        call_id=event.get("call_id", ""),
+                        name=event.get("name", ""),
+                        arguments=None,
+                    )
+                    tool_calls[key]["function"]["arguments"] += event.get("delta", "")
+                elif event_type == "response.function_call_arguments.done":
+                    _merge_codex_tool_call(
+                        tool_calls,
+                        item_id=event.get("item_id") or event.get("call_id") or "",
+                        call_id=event.get("call_id", ""),
+                        name=event.get("name", ""),
+                        arguments=event.get("arguments", ""),
+                    )
+                elif event_type == "response.completed":
+                    response_obj = event.get("response") or {}
+                    completed_response = response_obj
+                    usage = response_obj.get("usage") or {}
+                    prompt_tokens = usage.get("input_tokens", 0) or 0
+                    completion_tokens = usage.get("output_tokens", 0) or 0
+                    output_details = usage.get("output_tokens_details") or {}
+                    reasoning_tokens = output_details.get("reasoning_tokens", 0) or 0
+                    if not text_parts and response_obj.get("output_text"):
+                        text_parts.append(response_obj["output_text"])
+
+    extracted_completed: Dict[str, Any] = {}
+    if completed_response:
+        extracted_completed = _extract_openai_response_payload(completed_response)
+        if not text_parts and extracted_completed.get("content"):
+            text_parts = [extracted_completed["content"]]
+        if extracted_completed.get("tool_calls"):
+            for i, tc in enumerate(extracted_completed["tool_calls"]):
+                if not isinstance(tc, dict):
+                    continue
+                function = tc.get("function") or {}
+                key = tc.get("id") or str(i)
+                _merge_codex_tool_call(
+                    tool_calls,
+                    item_id=key,
+                    call_id=tc.get("id", ""),
+                    name=function.get("name", ""),
+                    arguments=function.get("arguments"),
+                )
+        if not thinking_parts and extracted_completed.get("thinking"):
+            thinking_parts = [extracted_completed["thinking"]]
+        if not prompt_tokens:
+            prompt_tokens = extracted_completed.get("prompt_tokens", 0) or 0
+        if not completion_tokens:
+            completion_tokens = extracted_completed.get("completion_tokens", 0) or 0
+        if not reasoning_tokens:
+            reasoning_tokens = extracted_completed.get("reasoning_tokens", 0) or 0
+
+    # Some Codex backends emit both delta and done events. Prefer the finalized
+    # form if the delta stream produced duplicated content.
+    if len(text_parts) > 1 and text_parts[-1] and "".join(text_parts[:-1]).endswith(text_parts[-1]):
+        text_parts = [text_parts[-1]]
+    if len(thinking_parts) > 1 and thinking_parts[-1] and "".join(thinking_parts[:-1]).endswith(thinking_parts[-1]):
+        thinking_parts = [thinking_parts[-1]]
+
+    result: Dict[str, Any] = {
+        "content": "".join(text_parts),
+        "finish_reason": "tool_calls" if tool_calls else "stop",
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+    if tool_calls:
+        result["tool_calls"] = list(tool_calls.values())
+    if thinking_parts:
+        result["thinking"] = "".join(thinking_parts)
+    if reasoning_tokens:
+        result["reasoning_tokens"] = reasoning_tokens
+    return result
 
 
 # Shared Gemini clients — reused across requests, keyed by API key.
@@ -1327,7 +1599,7 @@ async def chat_completions(
             resolve_profile,
         )
 
-        # --- Check routing profiles (auto/eco/premium/free/reasoning) ---
+        # --- Check routing profiles (auto/eco/premium/free/reasoning/etc.) ---
         profile = resolve_profile(request.model)
 
         if profile == "eco":
@@ -1363,6 +1635,15 @@ async def chat_completions(
                 "strategy": "profile:reasoning",
                 "selected_model": selected_model,
                 "tier": "reasoning",
+                "confidence": 1.0,
+                "complexity_score": 0,
+            }
+        elif profile == "orchestrator":
+            selected_model = settings.ORCHESTRATOR_MODEL
+            analysis_info = {
+                "strategy": "profile:orchestrator",
+                "selected_model": selected_model,
+                "tier": "orchestrator",
                 "confidence": 1.0,
                 "complexity_score": 0,
             }
@@ -1453,6 +1734,7 @@ async def chat_completions(
                     messages=request.messages,
                     simple_model=settings.SIMPLE_MODEL,
                     complex_model=settings.COMPLEX_MODEL,
+                    orchestrator_model=settings.ORCHESTRATOR_MODEL,
                     reasoning_model=settings.REASONING_MODEL,
                     free_model=settings.FREE_MODEL,
                 )
