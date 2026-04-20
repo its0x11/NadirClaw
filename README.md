@@ -146,6 +146,30 @@ curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.s
 
 This clones the repo to `~/.nadirclaw`, creates a virtual environment, installs dependencies, and adds `nadirclaw` to your PATH. Run it again to update.
 
+To install into a custom location such as `~/.nadirclaw-test`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh -s -- --install-dir ~/.nadirclaw-test
+```
+
+You can also use environment variables:
+
+```bash
+NADIRCLAW_HOME=~/.nadirclaw-test \
+curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh
+```
+
+`--install-dir` takes precedence over `NADIRCLAW_HOME`, which takes precedence over `NADIRCLAW_INSTALL_DIR`.
+
+At runtime, NadirClaw also respects:
+
+```bash
+export NADIRCLAW_HOME=~/.nadirclaw-test
+export OPENCLAW_HOME=~/.openclaw
+```
+
+`NADIRCLAW_HOME` controls where NadirClaw reads `.env`, `credentials.json`, and logs. `OPENCLAW_HOME` controls where OpenClaw fallback credentials and config are read/written.
+
 ### Manual install
 
 ```bash
@@ -191,7 +215,7 @@ docker run -p 8856:8856 --env-file .env nadirclaw
 
 ### Environment File
 
-NadirClaw loads configuration from `~/.nadirclaw/.env`. Create or edit this file to set API keys and model preferences:
+NadirClaw loads configuration from `$NADIRCLAW_HOME/.env` when `NADIRCLAW_HOME` is set, otherwise from `~/.nadirclaw/.env`. Create or edit this file to set API keys and model preferences:
 
 ```bash
 # ~/.nadirclaw/.env
@@ -215,8 +239,8 @@ If `~/.nadirclaw/.env` does not exist, NadirClaw falls back to `.env` in the cur
 
 NadirClaw supports multiple ways to provide LLM credentials, checked in this order:
 
-1. **OpenClaw stored token** (`~/.openclaw/agents/main/agent/auth-profiles.json`)
-2. **NadirClaw stored credential** (`~/.nadirclaw/credentials.json`)
+1. **OpenClaw stored token** (`$OPENCLAW_HOME/agents/main/agent/auth-profiles.json`, default `~/.openclaw/...`)
+2. **NadirClaw stored credential** (`$NADIRCLAW_HOME/credentials.json`, default `~/.nadirclaw/credentials.json`)
 3. **Environment variable** (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.)
 
 #### Using `nadirclaw auth` (recommended)

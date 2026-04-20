@@ -65,6 +65,54 @@ class TestAnthropicSetupToken:
         assert validate_anthropic_setup_token(token) is None
 
 
+class TestOpenAIOAuth:
+    def test_openai_authorize_url_matches_codex_flow(self, monkeypatch):
+        from nadirclaw.oauth import login_openai
+
+        captured = {}
+
+        class _Server:
+            def shutdown(self):
+                return None
+
+        class _Queue:
+            def get(self, timeout=None):
+                return {"code": "auth-code", "state": captured["state"]}
+
+        class _TokenResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"access_token":"tok","refresh_token":"ref","expires_in":3600}'
+
+        def _capture_open(url):
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            captured["url"] = url
+            captured["state"] = params["state"][0]
+            return True
+
+        monkeypatch.setattr(
+            "nadirclaw.oauth._start_callback_server",
+            lambda timeout=300, port=1455, callback_path="/auth/callback": (_Server(), _Queue()),
+        )
+        monkeypatch.setattr("nadirclaw.oauth.webbrowser.open", _capture_open)
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=30: _TokenResp())
+
+        token_data = login_openai(timeout=1)
+
+        assert token_data["access_token"] == "tok"
+        assert "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" in captured["url"]
+        assert "id_token_add_organizations=true" in captured["url"]
+        assert "codex_cli_simplified_flow=true" in captured["url"]
+
+
 class TestGeminiClientConfig:
     def test_env_var_override(self, monkeypatch):
         from nadirclaw.oauth import _resolve_gemini_client_config

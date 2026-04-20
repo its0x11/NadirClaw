@@ -22,6 +22,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from nadirclaw.paths import gemini_home, openclaw_auth_profiles_path, openclaw_home
+
 logger = logging.getLogger("nadirclaw")
 
 # ---------------------------------------------------------------------------
@@ -234,7 +236,7 @@ def login_openai(timeout: int = 300) -> Optional[dict]:
     code_challenge = _generate_code_challenge(code_verifier)
     state = secrets.token_urlsafe(32)
 
-    redirect_uri = f"http://127.0.0.1:{_CALLBACK_PORT}{_CALLBACK_PATH}"
+    redirect_uri = f"http://localhost:{_CALLBACK_PORT}{_CALLBACK_PATH}"
 
     # Build authorization URL
     auth_params = {
@@ -246,6 +248,8 @@ def login_openai(timeout: int = 300) -> Optional[dict]:
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
         "audience": _OPENAI_AUDIENCE,
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
     }
     auth_url = f"{_OPENAI_AUTHORIZE_URL}?{urllib.parse.urlencode(auth_params)}"
 
@@ -766,8 +770,8 @@ def login_antigravity(timeout: int = 300) -> Optional[dict]:
 # Gemini CLI — delegate to `gemini auth login` and read stored credentials
 # ---------------------------------------------------------------------------
 
-_GEMINI_OAUTH_CREDS_PATH = Path.home() / ".gemini" / "oauth_creds.json"
-_GEMINI_ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
+_GEMINI_OAUTH_CREDS_PATH = gemini_home() / "oauth_creds.json"
+_GEMINI_ACCOUNTS_PATH = gemini_home() / "google_accounts.json"
 
 
 def _read_gemini_cli_credentials() -> Optional[dict]:
@@ -826,8 +830,8 @@ def _read_gemini_credentials() -> Optional[dict]:
 
     # 2. Try OpenClaw auth-profiles
     for profile_path in [
-        Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
-        Path.home() / ".openclaw" / "auth-profiles.json",
+        openclaw_auth_profiles_path(),
+        openclaw_home() / "auth-profiles.json",
     ]:
         if profile_path.exists():
             try:
@@ -1034,4 +1038,3 @@ def login_gemini(timeout: int = 300) -> Optional[dict]:
 
     finally:
         server.shutdown()
-

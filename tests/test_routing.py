@@ -47,6 +47,9 @@ class TestResolveProfile:
     def test_reasoning(self):
         assert resolve_profile("reasoning") == "reasoning"
 
+    def test_orchestrator(self):
+        assert resolve_profile("orchestrator") == "orchestrator"
+
     def test_nadirclaw_prefix(self):
         assert resolve_profile("nadirclaw/eco") == "eco"
         assert resolve_profile("nadirclaw/premium") == "premium"
@@ -342,7 +345,7 @@ class TestApplyRoutingModifiers:
         assert tier == "simple"
 
     def test_agentic_override(self):
-        """Agentic request overrides simple → complex."""
+        """Agentic request overrides simple → orchestrator when configured."""
         messages = [
             _msg("system", "You are a coding agent. You can use tools."),
             _msg("user", "Refactor this"),
@@ -358,10 +361,55 @@ class TestApplyRoutingModifiers:
         }
         model, tier, info = apply_routing_modifiers(
             "gemini-flash", "simple", meta, messages, "gemini-flash", "gpt-4o",
+            orchestrator_model="openai-codex/gpt-5.4",
+        )
+        assert model == "openai-codex/gpt-5.4"
+        assert tier == "orchestrator"
+        assert "agentic_override" in info["modifiers_applied"]
+
+    def test_agentic_override_falls_back_to_complex_without_orchestrator(self):
+        """Agentic request still routes to complex when no orchestrator model is set."""
+        messages = [
+            _msg("system", "You are a coding agent. You can use tools."),
+            _msg("user", "Refactor this"),
+            _msg("assistant", "reading file"),
+            _msg("tool", "contents"),
+        ]
+        meta = {
+            "has_tools": True, "tool_count": 2,
+            "system_prompt_text": "You are a coding agent. You can use tools.",
+            "system_prompt_length": 600, "message_count": 4,
+        }
+        model, tier, info = apply_routing_modifiers(
+            "gemini-flash", "simple", meta, messages, "gemini-flash", "gpt-4o",
         )
         assert model == "gpt-4o"
         assert tier == "complex"
         assert "agentic_override" in info["modifiers_applied"]
+
+    def test_complex_planning_routes_to_planning_model(self, monkeypatch):
+        """Planning subtype applies PLANNING_MODEL instead of staying on complex."""
+        monkeypatch.setenv("NADIRCLAW_PLANNING_MODEL", "test/planning")
+        messages = [_msg("user", "strategy roadmap plan goal quarterly annual milestone objective")]
+        meta = {"has_tools": False, "tool_count": 0, "system_prompt_text": "", "system_prompt_length": 0, "message_count": 1}
+        model, tier, info = apply_routing_modifiers(
+            "gpt-4o", "complex", meta, messages, "gemini-flash", "gpt-4o",
+        )
+        assert model == "test/planning"
+        assert tier == "planning"
+        assert "complex_subtype_override(planning)" in info["modifiers_applied"]
+
+    def test_short_strong_coding_routes_to_coding_model(self, monkeypatch):
+        """Short subtype routing is delegated to classify_complex_subtype()."""
+        monkeypatch.setenv("NADIRCLAW_CODING_MODEL", "test/coding")
+        messages = [_msg("user", "function def class import return implement debug algorithm")]
+        meta = {"has_tools": False, "tool_count": 0, "system_prompt_text": "", "system_prompt_length": 0, "message_count": 1}
+        model, tier, info = apply_routing_modifiers(
+            "gpt-4o", "complex", meta, messages, "gemini-flash", "gpt-4o",
+        )
+        assert model == "test/coding"
+        assert tier == "coding"
+        assert "complex_subtype_override(coding)" in info["modifiers_applied"]
 
     def test_agentic_no_override_if_already_complex(self):
         """Agentic request doesn't change anything if already complex."""
@@ -674,7 +722,8 @@ class TestCostBreakdown:
 # ---------------------------------------------------------------------------
 
 class TestSettingsMidTier:
-    def test_default_no_mid(self):
+    def test_default_no_mid(self, monkeypatch):
+        monkeypatch.delenv("NADIRCLAW_MID_MODEL", raising=False)
         from nadirclaw.settings import Settings
         s = Settings()
         assert s.has_mid_tier is False

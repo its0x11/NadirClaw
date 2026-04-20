@@ -16,6 +16,7 @@ from nadirclaw.server import (
     ChatCompletionRequest,
     ChatMessage,
     _build_streaming_response,
+    _build_openai_response_input,
     _call_litellm,
     _extract_request_metadata,
     app,
@@ -239,6 +240,39 @@ class TestCallLitellmMessages:
         assert tool_msg["tool_call_id"] == "call_abc123"
         assert tool_msg["name"] == "get_weather"
         assert tool_msg["content"] == "72F sunny"
+
+    def test_openai_codex_responses_input_preserves_tool_history(self):
+        """Codex requests should be translated into Responses API items."""
+        request = _make_request(
+            [
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [SAMPLE_TOOL_CALL],
+                },
+                {
+                    "role": "tool",
+                    "content": "72F sunny",
+                    "tool_call_id": "call_abc123",
+                    "name": "get_weather",
+                },
+            ],
+            tools=[WEATHER_TOOL],
+            model="openai-codex/gpt-5.4",
+        )
+
+        items = _build_openai_response_input(request)
+        assert items[0]["type"] == "message"
+        assert items[0]["role"] == "user"
+        assert items[1]["type"] == "function_call"
+        assert items[1]["call_id"] == "call_abc123"
+        assert items[1]["name"] == "get_weather"
+        assert items[2] == {
+            "type": "function_call_output",
+            "call_id": "call_abc123",
+            "output": "72F sunny",
+        }
 
     @pytest.mark.asyncio
     async def test_tool_calls_in_response(self):

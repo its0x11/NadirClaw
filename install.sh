@@ -1,10 +1,12 @@
 #!/bin/sh
 # NadirClaw installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh
+#        curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh -s -- --install-dir ~/.nadirclaw-test
 set -e
 
 REPO="https://github.com/doramirdor/NadirClaw.git"
-INSTALL_DIR="${NADIRCLAW_INSTALL_DIR:-$HOME/.nadirclaw}"
+DEFAULT_INSTALL_DIR="$HOME/.nadirclaw"
+INSTALL_DIR=""
 BIN_DIR="${NADIRCLAW_BIN_DIR:-/usr/local/bin}"
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -14,6 +16,65 @@ ok()    { printf '\033[1;32m[nadirclaw]\033[0m %s\n' "$1"; }
 err()   { printf '\033[1;31m[nadirclaw]\033[0m %s\n' "$1" >&2; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+    cat <<EOF
+NadirClaw installer
+
+Usage:
+  sh install.sh [options]
+  curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/doramirdor/NadirClaw/main/install.sh | sh -s -- --install-dir ~/.nadirclaw-test
+
+Options:
+  --install-dir PATH   Install into PATH
+  --bin-dir PATH       Link wrapper into PATH
+  -h, --help           Show this help
+
+Environment variables:
+  NADIRCLAW_HOME         Alias for install root
+  NADIRCLAW_INSTALL_DIR  Install root
+  NADIRCLAW_BIN_DIR      Symlink destination for the nadirclaw wrapper
+
+Precedence:
+  --install-dir > NADIRCLAW_HOME > NADIRCLAW_INSTALL_DIR > $HOME/.nadirclaw
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --install-dir)
+            if [ "$#" -lt 2 ]; then
+                err "--install-dir requires a path"
+                exit 1
+            fi
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --bin-dir)
+            if [ "$#" -lt 2 ]; then
+                err "--bin-dir requires a path"
+                exit 1
+            fi
+            BIN_DIR="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            err "Unknown option: $1"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$INSTALL_DIR" ]; then
+    INSTALL_DIR="${NADIRCLAW_HOME:-${NADIRCLAW_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}}"
+fi
 
 # ── Preflight ────────────────────────────────────────────────
 
@@ -88,7 +149,7 @@ fi
 # Install package
 info "Installing dependencies (this may take a minute)..."
 "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/venv/bin/pip" install --quiet -e "$INSTALL_DIR"
+"$INSTALL_DIR/venv/bin/pip" install --quiet "$INSTALL_DIR"
 
 # ── Create CLI wrapper ───────────────────────────────────────
 
