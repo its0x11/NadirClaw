@@ -463,6 +463,16 @@ def _looks_like_openai_api_key(token: str) -> bool:
     return token.startswith("sk-")
 
 
+def _use_public_openai_responses_api(token: str, credential_source: str) -> bool:
+    """Choose the Codex backend from credential provenance first, token shape second."""
+    source = (credential_source or "").lower()
+    if source in ("oauth", "openclaw"):
+        return False
+    if source in ("env", "manual", "setup-token", "stored"):
+        return True
+    return _looks_like_openai_api_key(token)
+
+
 _DEFAULT_CODEX_INSTRUCTIONS = (
     "You are Codex, a coding assistant. Follow the user's instructions, "
     "respect tool outputs, and provide direct, accurate help."
@@ -712,7 +722,7 @@ async def _call_openai_codex(
         )
 
     cred_source = get_credential_source("openai-codex") or "unknown"
-    use_public_api = _looks_like_openai_api_key(api_key)
+    use_public_api = _use_public_openai_responses_api(api_key, cred_source)
     endpoint = (
         "https://api.openai.com/v1/responses"
         if use_public_api

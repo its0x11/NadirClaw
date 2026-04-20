@@ -6,14 +6,18 @@ from unittest.mock import AsyncMock, patch
 
 
 class TestFallbackChainConfig:
-    def test_default_chain_includes_tier_models(self):
+    def test_default_chain_includes_tier_models(self, monkeypatch):
         """Default chain should include complex and simple models."""
-        from nadirclaw.settings import settings
-        chain = settings.FALLBACK_CHAIN
-        assert settings.COMPLEX_MODEL in chain
-        assert settings.SIMPLE_MODEL in chain
+        from nadirclaw.settings import Settings
+        monkeypatch.delenv("NADIRCLAW_FALLBACK_CHAIN", raising=False)
+        for tier in ("SIMPLE", "MID", "COMPLEX", "REASONING", "FREE", "ORCHESTRATOR", "CODING", "MATH", "PLANNING", "ABLITERATED"):
+            monkeypatch.delenv(f"NADIRCLAW_{tier}_FALLBACK", raising=False)
+        s = Settings()
+        chain = s.FALLBACK_CHAIN
+        assert s.COMPLEX_MODEL in chain
+        assert s.SIMPLE_MODEL in chain
         # Complex should come first
-        assert chain.index(settings.COMPLEX_MODEL) < chain.index(settings.SIMPLE_MODEL)
+        assert chain.index(s.COMPLEX_MODEL) < chain.index(s.SIMPLE_MODEL)
 
     def test_custom_chain_from_env(self, monkeypatch):
         """NADIRCLAW_FALLBACK_CHAIN env var should override defaults."""
@@ -43,9 +47,10 @@ class TestFallbackChainConfig:
 class TestPerTierFallbackConfig:
     def test_per_tier_simple_fallback(self, monkeypatch):
         """NADIRCLAW_SIMPLE_FALLBACK should override global chain for simple tier."""
+        from nadirclaw.settings import Settings
         monkeypatch.setenv("NADIRCLAW_SIMPLE_FALLBACK", "flash-a,flash-b")
         monkeypatch.setenv("NADIRCLAW_FALLBACK_CHAIN", "global-a,global-b")
-        from nadirclaw.settings import Settings
+        monkeypatch.delenv("NADIRCLAW_COMPLEX_FALLBACK", raising=False)
         s = Settings()
         assert s.get_tier_fallback_chain("simple") == ["flash-a", "flash-b"]
         # Other tiers should still use global chain

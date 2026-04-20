@@ -387,6 +387,30 @@ class TestApplyRoutingModifiers:
         assert tier == "complex"
         assert "agentic_override" in info["modifiers_applied"]
 
+    def test_complex_planning_routes_to_planning_model(self, monkeypatch):
+        """Planning subtype applies PLANNING_MODEL instead of staying on complex."""
+        monkeypatch.setenv("NADIRCLAW_PLANNING_MODEL", "test/planning")
+        messages = [_msg("user", "strategy roadmap plan goal quarterly annual milestone objective")]
+        meta = {"has_tools": False, "tool_count": 0, "system_prompt_text": "", "system_prompt_length": 0, "message_count": 1}
+        model, tier, info = apply_routing_modifiers(
+            "gpt-4o", "complex", meta, messages, "gemini-flash", "gpt-4o",
+        )
+        assert model == "test/planning"
+        assert tier == "planning"
+        assert "complex_subtype_override(planning)" in info["modifiers_applied"]
+
+    def test_short_strong_coding_routes_to_coding_model(self, monkeypatch):
+        """Short subtype routing is delegated to classify_complex_subtype()."""
+        monkeypatch.setenv("NADIRCLAW_CODING_MODEL", "test/coding")
+        messages = [_msg("user", "function def class import return implement debug algorithm")]
+        meta = {"has_tools": False, "tool_count": 0, "system_prompt_text": "", "system_prompt_length": 0, "message_count": 1}
+        model, tier, info = apply_routing_modifiers(
+            "gpt-4o", "complex", meta, messages, "gemini-flash", "gpt-4o",
+        )
+        assert model == "test/coding"
+        assert tier == "coding"
+        assert "complex_subtype_override(coding)" in info["modifiers_applied"]
+
     def test_agentic_no_override_if_already_complex(self):
         """Agentic request doesn't change anything if already complex."""
         messages = [
@@ -698,7 +722,8 @@ class TestCostBreakdown:
 # ---------------------------------------------------------------------------
 
 class TestSettingsMidTier:
-    def test_default_no_mid(self):
+    def test_default_no_mid(self, monkeypatch):
+        monkeypatch.delenv("NADIRCLAW_MID_MODEL", raising=False)
         from nadirclaw.settings import Settings
         s = Settings()
         assert s.has_mid_tier is False

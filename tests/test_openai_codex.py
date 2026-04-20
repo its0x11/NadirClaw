@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from nadirclaw.server import ChatCompletionRequest, _build_openai_codex_tools, _call_litellm, app
+from nadirclaw.server import (
+    ChatCompletionRequest,
+    _build_openai_codex_tools,
+    _call_litellm,
+    _use_public_openai_responses_api,
+    app,
+)
 
 
 class _MockResponse:
@@ -21,11 +27,31 @@ class _MockResponse:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}: {self.text}")
 
+    async def aiter_lines(self):
+        yield "data: " + (
+            '{"type":"response.completed","response":'
+            + __import__("json").dumps(self._payload)
+            + "}"
+        )
+        yield "data: [DONE]"
+
+
+class _MockStreamContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
 
 class _MockAsyncClient:
     def __init__(self, response):
         self.response = response
         self.post_calls = []
+        self.stream_calls = []
 
     async def __aenter__(self):
         return self
@@ -36,6 +62,10 @@ class _MockAsyncClient:
     async def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
         return self.response
+
+    def stream(self, method, url, **kwargs):
+        self.stream_calls.append((method, url, kwargs))
+        return _MockStreamContext(self.response)
 
 
 def test_openai_codex_tools_are_flattened():
@@ -66,6 +96,13 @@ def test_openai_codex_tools_are_flattened():
             },
         }
     ]
+
+
+def test_openai_codex_endpoint_selection_uses_credential_source():
+    assert _use_public_openai_responses_api("sk-test-key", "oauth") is False
+    assert _use_public_openai_responses_api("not-an-sk-token", "openclaw") is False
+    assert _use_public_openai_responses_api("not-an-sk-token", "env") is True
+    assert _use_public_openai_responses_api("sk-test-key", "manual") is True
 
 
 @pytest.mark.asyncio
@@ -111,7 +148,7 @@ async def test_openai_codex_uses_responses_api():
 
     url, kwargs = client.post_calls[0]
     assert url == "https://api.openai.com/v1/responses"
-    assert kwargs["headers"]["Authorization"] == "Bearer oauth-token"
+    assert kwargs["headers"]["Authorization"] == "Bearer sk-test-key"
     assert kwargs["json"]["model"] == "gpt-5.4"
     assert kwargs["json"]["reasoning"] == {"effort": "high"}
 
@@ -153,9 +190,11 @@ async def test_openai_codex_oauth_uses_chatgpt_backend():
         result = await _call_litellm("openai-codex/gpt-5.4", request, "openai-codex")
 
     assert result["content"] == "def fn(): pass"
-    url, kwargs = client.post_calls[0]
+    method, url, kwargs = client.stream_calls[0]
+    assert method == "POST"
     assert url == "https://chatgpt.com/backend-api/codex/responses"
     assert kwargs["json"]["store"] is False
+    assert kwargs["json"]["stream"] is True
     assert kwargs["json"]["instructions"] == "Be terse and precise."
     assert kwargs["json"]["input"][0]["role"] == "user"
 
@@ -190,7 +229,7 @@ async def test_openai_codex_oauth_instructions_default_when_missing():
     ):
         await _call_litellm("openai-codex/gpt-5.4", request, "openai-codex")
 
-    _, kwargs = client.post_calls[0]
+    _, _, kwargs = client.stream_calls[0]
     assert kwargs["json"]["instructions"]
 
 

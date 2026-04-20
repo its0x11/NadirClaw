@@ -46,7 +46,9 @@ class TestModelsEndpoint:
 
 
 class TestClassifyEndpoint:
-    def test_classify_returns_classification(self, client):
+    @patch("nadirclaw.server._smart_route_analysis")
+    def test_classify_returns_classification(self, mock_route, client):
+        mock_route.return_value = _mock_analysis()
         resp = client.post("/v1/classify", json={"prompt": "What is 2+2?"})
         assert resp.status_code == 200
         data = resp.json()
@@ -55,7 +57,9 @@ class TestClassifyEndpoint:
         assert "confidence" in data["classification"]
         assert "selected_model" in data["classification"]
 
-    def test_classify_batch(self, client):
+    @patch("nadirclaw.server._smart_route_analysis")
+    def test_classify_batch(self, mock_route, client):
+        mock_route.return_value = _mock_analysis()
         resp = client.post(
             "/v1/classify/batch",
             json={"prompts": ["Hello", "Design a distributed system"]},
@@ -87,11 +91,26 @@ def _mock_fallback(content="OK", prompt_tokens=10, completion_tokens=5, model=No
     return _side_effect
 
 
+def _mock_analysis(model="gemini-2.5-flash", tier="simple"):
+    return (
+        model,
+        {
+            "strategy": "test",
+            "selected_model": model,
+            "tier": tier,
+            "confidence": 1.0,
+            "complexity_score": 0,
+        },
+    )
+
+
 class TestRoutingHeaders:
     """X-Routed-Model, X-Routed-Tier, X-Complexity-Score headers."""
 
+    @patch("nadirclaw.server._smart_route_full")
     @patch("nadirclaw.server._call_with_fallback")
-    def test_non_streaming_response_has_routing_headers(self, mock_fb, client):
+    def test_non_streaming_response_has_routing_headers(self, mock_fb, mock_route, client):
+        mock_route.return_value = _mock_analysis()
         mock_fb.side_effect = _mock_fallback(content="hi")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "routing header test 8x2q"}],
@@ -114,8 +133,10 @@ class TestRoutingHeaders:
         assert resp.headers["X-Routed-Model"] == "gpt-4o"
         assert resp.headers["X-Routed-Tier"] == "direct"
 
+    @patch("nadirclaw.server._smart_route_full")
     @patch("nadirclaw.server._stream_with_fallback")
-    def test_streaming_response_has_routing_headers(self, mock_stream, client):
+    def test_streaming_response_has_routing_headers(self, mock_stream, mock_route, client):
+        mock_route.return_value = _mock_analysis()
         async def _fake_stream(*args, **kwargs):
             yield 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
             yield "data: [DONE]\n\n"
@@ -219,8 +240,8 @@ class TestTierRoutingToCorrectModel:
     """
 
     @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.ORCHESTRATOR_MODEL", "test/orchestrator-model")
-    def test_orchestrator_tier_routes_to_orchestrator_model(self, mock_fb, client):
+    def test_orchestrator_tier_routes_to_orchestrator_model(self, mock_fb, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_ORCHESTRATOR_MODEL", "test/orchestrator-model")
         mock_fb.side_effect = _mock_fallback(content="ok")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "orchestrator routing to model"}],
@@ -228,10 +249,11 @@ class TestTierRoutingToCorrectModel:
         })
         assert resp.status_code == 200
         assert resp.headers["X-Routed-Tier"] == "orchestrator"
+        assert resp.headers["X-Routed-Model"] == "test/orchestrator-model"
 
     @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.CODING_MODEL", "test/coding-model")
-    def test_coding_tier_routes_to_coding_model(self, mock_fb, client):
+    def test_coding_tier_routes_to_coding_model(self, mock_fb, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_CODING_MODEL", "test/coding-model")
         mock_fb.side_effect = _mock_fallback(content="ok")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "coding routing to model"}],
@@ -241,10 +263,11 @@ class TestTierRoutingToCorrectModel:
         # When the profile branch is taken, selected_model comes from settings.CODING_MODEL
         # The header reflects what was actually routed
         assert resp.headers["X-Routed-Tier"] == "coding"
+        assert resp.headers["X-Routed-Model"] == "test/coding-model"
 
     @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.MATH_MODEL", "test/math-model")
-    def test_math_tier_routes_to_math_model(self, mock_fb, client):
+    def test_math_tier_routes_to_math_model(self, mock_fb, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_MATH_MODEL", "test/math-model")
         mock_fb.side_effect = _mock_fallback(content="ok")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "math routing to model"}],
@@ -252,10 +275,11 @@ class TestTierRoutingToCorrectModel:
         })
         assert resp.status_code == 200
         assert resp.headers["X-Routed-Tier"] == "math"
+        assert resp.headers["X-Routed-Model"] == "test/math-model"
 
     @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.PLANNING_MODEL", "test/planning-model")
-    def test_planning_tier_routes_to_planning_model(self, mock_fb, client):
+    def test_planning_tier_routes_to_planning_model(self, mock_fb, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_PLANNING_MODEL", "test/planning-model")
         mock_fb.side_effect = _mock_fallback(content="ok")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "planning routing to model"}],
@@ -263,10 +287,11 @@ class TestTierRoutingToCorrectModel:
         })
         assert resp.status_code == 200
         assert resp.headers["X-Routed-Tier"] == "planning"
+        assert resp.headers["X-Routed-Model"] == "test/planning-model"
 
     @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.ABLITERATED_MODEL", "test/abliterated-model")
-    def test_abliterated_tier_routes_to_abliterated_model(self, mock_fb, client):
+    def test_abliterated_tier_routes_to_abliterated_model(self, mock_fb, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_ABLITERATED_MODEL", "test/abliterated-model")
         mock_fb.side_effect = _mock_fallback(content="ok")
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "abliterated routing to model"}],
@@ -274,66 +299,64 @@ class TestTierRoutingToCorrectModel:
         })
         assert resp.status_code == 200
         assert resp.headers["X-Routed-Tier"] == "abliterated"
+        assert resp.headers["X-Routed-Model"] == "test/abliterated-model"
 
 
 class TestTierFallbackChain:
     """Verify fallback chain is used when primary model fails."""
 
-    @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.ORCHESTRATOR_MODEL", "primary/orchestrator")
-    def test_orchestrator_tier_falls_back_on_failure(self, mock_fb, client):
-        call_count = [0]
+    @patch("nadirclaw.server._dispatch_model")
+    def test_orchestrator_tier_falls_back_on_failure(self, mock_dispatch, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_ORCHESTRATOR_MODEL", "primary/orchestrator")
+        monkeypatch.setenv("NADIRCLAW_ORCHESTRATOR_FALLBACK", "primary/orchestrator,fallback/orchestrator")
+        calls = []
 
-        async def _fail_first(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
+        async def _fail_first(model, *args, **kwargs):
+            calls.append(model)
+            if model == "primary/orchestrator":
                 raise Exception("primary failed")
-            return (
-                {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1},
-                "fallback/orchestrator",
-                {"selected_model": "fallback/orchestrator", "tier": "orchestrator"},
-            )
+            return {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1}
 
-        mock_fb.side_effect = _fail_first
+        mock_dispatch.side_effect = _fail_first
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "orchestrator fallback test"}],
             "model": "orchestrator",
         })
         assert resp.status_code == 200
-        assert call_count[0] == 2
+        assert calls == ["primary/orchestrator", "fallback/orchestrator"]
+        assert resp.headers["X-Routed-Model"] == "fallback/orchestrator"
 
-    @patch("nadirclaw.server._call_with_fallback")
-    @patch("nadirclaw.server.settings.CODING_MODEL", "primary/coding")
-    @patch("nadirclaw.server.settings.FALLBACK_CHAIN", ["primary/coding", "fallback/coding"])
-    def test_coding_tier_falls_back_on_failure(self, mock_fb, client):
-        call_count = [0]
+    @patch("nadirclaw.server._dispatch_model")
+    def test_coding_tier_falls_back_on_failure(self, mock_dispatch, client, monkeypatch):
+        monkeypatch.setenv("NADIRCLAW_CODING_MODEL", "primary/coding")
+        monkeypatch.setenv("NADIRCLAW_CODING_FALLBACK", "primary/coding,fallback/coding")
+        calls = []
 
-        async def _fail_first(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
+        async def _fail_first(model, *args, **kwargs):
+            calls.append(model)
+            if model == "primary/coding":
                 raise Exception("primary failed")
-            return (
-                {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1},
-                "fallback/coding",
-                {"selected_model": "fallback/coding", "tier": "coding"},
-            )
+            return {"content": "fallback ok", "finish_reason": "stop", "prompt_tokens": 1, "completion_tokens": 1}
 
-        mock_fb.side_effect = _fail_first
+        mock_dispatch.side_effect = _fail_first
         resp = client.post("/v1/chat/completions", json={
             "messages": [{"role": "user", "content": "coding fallback test"}],
             "model": "coding",
         })
         # Should eventually succeed via fallback
         assert resp.status_code == 200
-        assert call_count[0] == 2, "Fallback should have been called after primary failure"
+        assert calls == ["primary/coding", "fallback/coding"], "Fallback should have been called after primary failure"
+        assert resp.headers["X-Routed-Model"] == "fallback/coding"
 
 
 class TestExistingProfilesRegression:
     """Regression: existing profiles must still work after adding new tiers."""
 
     @pytest.mark.parametrize("profile", ("auto", "simple", "complex", "mid", "reasoning", "free"))
+    @patch("nadirclaw.server._smart_route_full")
     @patch("nadirclaw.server._call_with_fallback")
-    def test_existing_profile_still_works(self, mock_fb, client, profile):
+    def test_existing_profile_still_works(self, mock_fb, mock_route, client, profile):
+        mock_route.return_value = _mock_analysis()
         mock_fb.side_effect = _mock_fallback(content="ok")
         payload = {
             "messages": [{"role": "user", "content": f"{profile} regression test"}],

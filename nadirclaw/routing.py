@@ -288,25 +288,36 @@ _PLANNING_KEYWORDS = [
 ]
 
 _ABLITERATED_KEYWORDS = [
-    "ignore", "disregard", "forget", "previous",
-    "you are now", "pretend", "roleplay as",
-    "unfiltered", "no guidelines", "bypass",
-    "jailbreak", "DAN", "do anything now",
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "disregard previous instructions",
+    "forget previous instructions",
+    "forget all previous instructions",
+    "you are now unfiltered",
+    "pretend to be unfiltered",
+    "roleplay as unfiltered",
+    "no guidelines apply",
+    "bypass safety guidelines",
+    "bypass your guidelines",
+    "jailbreak mode",
+    "dan mode",
+    "do anything now",
 ]
 
 
-def classify_complex_subtype(prompt: str, word_count: int) -> str:
+def classify_complex_subtype(prompt: str, word_count: int) -> Optional[str]:
     """Classify a complex-tier prompt into a sub-type.
 
     When a prompt is routed as 'complex', this function determines which
     specialized model to use: coding, math, planning, or abliterated.
 
     Args:
-        prompt: The full prompt text (lower-cased for matching)
+        prompt: The full prompt text
         word_count: Number of words in the prompt
 
     Returns:
-        Sub-type: 'coding' | 'math' | 'planning' | 'abliterated'
+        Sub-type: 'coding' | 'math' | 'planning' | 'abliterated', or None
+        when no specialized subtype has enough signal.
 
     Priority:
         1. abliterator always wins (binary filter)
@@ -337,11 +348,11 @@ def classify_complex_subtype(prompt: str, word_count: int) -> str:
     scores.sort(key=lambda x: (-x[1], priority_order.index(x[0])))
     best_name, best_score = scores[0]
 
-    # Short prompts (< 50 words): only route if strong signal (>= 4 matches), else planning
+    # Short prompts (< 50 words): only route if strong signal (>= 4 matches).
     if word_count < 50:
         if best_score >= 4:
             return best_name
-        return "planning"
+        return None
 
     # Planning requires sufficient context (>= 200 words AND >= 2 planning keywords)
     if planning_score >= 2 and word_count >= 200:
@@ -351,8 +362,8 @@ def classify_complex_subtype(prompt: str, word_count: int) -> str:
     if best_score >= 2:
         return best_name
 
-    # Default fallback for ambiguous/short complex prompts
-    return "planning"
+    # No specialized subtype matched strongly enough.
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -597,23 +608,21 @@ def apply_routing_modifiers(
     # --- Complex sub-type detection (coding/math/planning/abliterated) ---
     if final_tier == "complex":
         word_count = len(prompt_text.split())
-        if word_count >= 50:
-            complex_subtype = classify_complex_subtype(prompt_text, word_count)
-            if complex_subtype != "planning":
-                # Map sub-type to corresponding model
-                subtype_model_map = {
-                    "coding": settings.CODING_MODEL,
-                    "math": settings.MATH_MODEL,
-                    "planning": settings.PLANNING_MODEL,
-                    "abliterated": settings.ABLITERATED_MODEL,
-                }
-                final_model = subtype_model_map.get(complex_subtype, final_model)
-                final_tier = complex_subtype
-                routing_info["modifiers_applied"].append(f"complex_subtype_override({complex_subtype})")
-                logger.info(
-                    "Complex sub-type override: → %s (word_count=%d)",
-                    complex_subtype, word_count,
-                )
+        complex_subtype = classify_complex_subtype(prompt_text, word_count)
+        subtype_model_map = {
+            "coding": settings.CODING_MODEL,
+            "math": settings.MATH_MODEL,
+            "planning": settings.PLANNING_MODEL,
+            "abliterated": settings.ABLITERATED_MODEL,
+        }
+        if complex_subtype:
+            final_model = subtype_model_map.get(complex_subtype, final_model)
+            final_tier = complex_subtype
+            routing_info["modifiers_applied"].append(f"complex_subtype_override({complex_subtype})")
+            logger.info(
+                "Complex sub-type override: → %s (word_count=%d)",
+                complex_subtype, word_count,
+            )
 
     # --- Reasoning detection ---
     reasoning = detect_reasoning(prompt_text, system_text)
